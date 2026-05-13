@@ -8,3 +8,14 @@ __pycache__/
 .vscode/
 build/
 dist/
+
+# Android
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/.idea/
+android/app/release/
+*.apk
+*.aab
