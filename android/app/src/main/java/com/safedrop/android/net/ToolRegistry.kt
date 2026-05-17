@@ -4,21 +4,27 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import android.util.Base64
+import com.safedrop.android.photo.PhotoCapturer
+import com.safedrop.android.photo.PhotoResult
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * One callable that another SafeDrop peer can invoke remotely.
  *
- * The handler takes a JSONObject of arguments and returns either a
- * primitive (String/Number/Boolean), a JSONObject, a JSONArray, or null.
- * Throwing inside the handler turns into a structured `error` on the wire.
+ * The handler is a `suspend` function that takes a JSONObject of
+ * arguments and returns either a primitive (String/Number/Boolean), a
+ * JSONObject, a JSONArray, or null. Throwing inside the handler turns
+ * into a structured `error` on the wire. Handlers that need to wait on
+ * a user action (e.g. `take_photo`) can suspend without blocking the
+ * inbound dispatcher thread.
  */
 data class ToolSpec(
     val name: String,
     val description: String,
     val inputSchema: JSONObject,
-    val handler: (JSONObject) -> Any?,
+    val handler: suspend (JSONObject) -> Any?,
 ) {
     fun manifest(): JSONObject = JSONObject().apply {
         put("name", name)
@@ -44,7 +50,7 @@ class ToolRegistry {
     }
 
     /** @throws [NoSuchElementException] if no such tool. */
-    fun call(name: String, arguments: JSONObject): Any? {
+    suspend fun call(name: String, arguments: JSONObject): Any? {
         val spec = tools[name] ?: throw NoSuchElementException("unknown tool: $name")
         return spec.handler(arguments)
     }
@@ -53,8 +59,14 @@ class ToolRegistry {
 
 // ---------- default tools shipped on every Android peer --------------------
 
-/** Build the default registry with [system_info], [read_clipboard], [write_clipboard]. */
-fun buildDefaultRegistry(context: Context): ToolRegistry {
+/**
+ * Build the default registry with [system_info], [read_clipboard],
+ * [write_clipboard], and (if a [photoCapturer] is supplied) [take_photo].
+ */
+fun buildDefaultRegistry(
+    context: Context,
+    photoCapturer: PhotoCapturer? = null,
+): ToolRegistry {
     val reg = ToolRegistry()
     val app = context.applicationContext
 
@@ -123,6 +135,41 @@ fun buildDefaultRegistry(context: Context): ToolRegistry {
             }
         },
     ))
+
+    if (photoCapturer != null) {
+        reg.register(ToolSpec(
+            name = "take_photo",
+            description =
+                "Capture a photo with this device's camera. The user has to be holding the " +
+                "phone unlocked and the SafeDrop app foreground — the system camera UI opens, " +
+                "the user takes a shot, and the resulting JPEG comes back to the caller. " +
+                "Returns {mime_type, size_bytes, data_b64}.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("timeout_seconds", JSONObject().apply {
+                        put("type", "integer")
+                        put("default", 120)
+                        put("description", "Max seconds to wait for the user to take the shot.")
+                    })
+                })
+            },
+            handler = { args ->
+                val timeoutSeconds = args.optInt("timeout_seconds", 120)
+                val outcome = photoCapturer.capture(timeoutSeconds * 1000L)
+                when (outcome) {
+                    is PhotoResult.Success -> JSONObject().apply {
+                        put("mime_type", outcome.mimeType)
+                        put("size_bytes", outcome.bytes.size)
+                        put("data_b64", Base64.encodeToString(outcome.bytes, Base64.NO_WRAP))
+                    }
+                    is PhotoResult.Cancelled -> throw RuntimeException(
+                        "photo capture failed: ${outcome.reason}"
+                    )
+                }
+            },
+        ))
+    }
 
     return reg
 }

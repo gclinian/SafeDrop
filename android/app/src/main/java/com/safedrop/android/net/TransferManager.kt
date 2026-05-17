@@ -482,9 +482,11 @@ class TransferManager(
             return
         }
 
-        // Step 3: execute on the IO dispatcher (handlers may do clipboard/etc).
+        // Step 3: execute. The handler is `suspend`, so things like
+        // `take_photo` can wait for a UI callback without blocking the
+        // dispatcher thread.
         try {
-            val result = withContext(Dispatchers.Default) { toolRegistry.call(name, args) }
+            val result = toolRegistry.call(name, args)
             val resultJson: Any = result ?: JSONObject.NULL
             Protocol.sendJson(out, JSONObject().apply {
                 put("type", "CALL_TOOL_RESULT")

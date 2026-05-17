@@ -9,6 +9,7 @@ import com.safedrop.android.net.TCP_PORT
 import com.safedrop.android.net.TransferManager
 import com.safedrop.android.net.VERSION
 import com.safedrop.android.net.buildDefaultRegistry
+import com.safedrop.android.photo.PhotoCapturer
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +35,7 @@ class SafeDropService(context: Context) {
     )
 
     val trustStore: TrustStore = TrustStore(context)
+    val photoCapturer: PhotoCapturer = PhotoCapturer()
 
     val transfer: TransferManager = TransferManager(
         context = context,
@@ -41,7 +43,7 @@ class SafeDropService(context: Context) {
         deviceId = deviceId,
         deviceName = deviceName,
         tcpPort = TCP_PORT,
-        toolRegistry = buildDefaultRegistry(context),
+        toolRegistry = buildDefaultRegistry(context, photoCapturer),
         trustStore = trustStore,
     )
 

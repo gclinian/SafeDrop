@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- For ActivityResultContracts.TakePicture() — system camera writes the
+         JPEG into our app's cache dir, we read it back. -->
+    <cache-path name="photos" path="." />
+</paths>
