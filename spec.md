@@ -256,3 +256,75 @@ Final_Project/
 - TCP 可靠傳輸 + 進度
 - 使用者確認流程
 - 端對端加密的本地通訊
+
+## 15. AI agent integration (MCP server + CLI)
+
+SafeDrop 暴露兩條 programmatic 介面，讓 AI agent 或自動化腳本變成
+LAN 上的一個 SafeDrop peer：
+
+### 15.1 MCP server (`safedrop-mcp`)
+
+Headless mode — 啟動時自行生一組 Identity / Discovery / TransferManager，
+跟同機器上的 GUI 完全解耦，TCP 動態 port 避免衝突。
+Stdio transport，可被 Claude Code / Claude Desktop / Cursor 等 MCP host 使用。
+
+提供 4 個 tools：
+
+| Tool | 行為 |
+| --- | --- |
+| `list_devices()` | 回傳目前 LAN 上看到的 peer JSON 陣列 |
+| `send_file(device, path, timeout_seconds?)` | 發檔給某 peer，blocking 直到 done/rejected/failed |
+| `send_text(device, content, content_type?, timeout_seconds?)` | 發 text/url/code |
+| `wait_for_drop(timeout_seconds?)` | 阻塞直到別的裝置 push 進來，回傳該 drop 內容 |
+
+對外的安全模型不變 —— **接收端裝置上的人類仍然必須按 Accept**。
+MCP server 只是把 sender 那邊「按 Send」這一步換成「Claude 幫你呼叫」。
+
+### 15.2 CLI (`safedrop`)
+
+針對「只會 bash」的 agent / shell 自動化的 fallback，提供同樣 4 個動作：
+
+```
+safedrop ls
+safedrop send-file <device> <path>
+safedrop send-text <device> "<text>" [--type url|code]
+cat snippet.py | safedrop send-text <device> --stdin --type code
+safedrop wait
+```
+
+每次 invocation 啟一個 ephemeral peer，做事完關掉，加 `--json` 取得結構化輸出。
+
+## 16. Cross-device tools (Phase 2, not yet implemented)
+
+目前 MCP server 只暴露 *local* SafeDrop 功能。下個 milestone 把 **遠端裝置的能力**
+動態 import 成 master agent 的 tools，每個 SafeDrop peer 可以 expose 自己的 tool registry
+（手機相機、桌面 shell、Pi 上的 GPIO…）。
+
+在現有 protocol 上加 4 條訊息（一樣走加密 TCP frame）：
+
+```
+{ "type": "LIST_TOOLS", "request_id": "..." }
+
+{ "type": "TOOLS_LIST",  "request_id": "...",
+  "tools": [
+    {"name": "take_photo", "description": "...", "inputSchema": {...}},
+    ...
+  ]
+}
+
+{ "type": "CALL_TOOL",   "request_id": "...",
+  "name": "take_photo", "arguments": {...} }
+
+{ "type": "CALL_TOOL_RESULT", "request_id": "...",
+  "result": {...} | "error": "..." }
+```
+
+HELLO 加 `"capabilities": ["safedrop.transfer", "agent.tools"]`，舊版 peer 沒這欄
+就視為純傳檔 peer，向後相容。
+
+Trust model：
+
+- 未配對 peer 的 `LIST_TOOLS` 預設拒絕
+- 配對後預設 per-call confirm（受邀裝置跳 dialog「X 想呼叫 Y，Allow / Deny」）
+- 可設 per-tool always-allow / always-deny
+- 全部 cross-device call 寫進本地 audit log，GUI 可瀏覽

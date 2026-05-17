@@ -150,6 +150,10 @@ class TransferManager:
         sock.bind(("0.0.0.0", self.tcp_port))
         sock.listen(8)
         sock.settimeout(1.0)
+        # If caller passed tcp_port=0, ask the OS what we actually got so
+        # downstream code (e.g. the discovery HELLO) advertises the right port.
+        if self.tcp_port == 0:
+            self.tcp_port = sock.getsockname()[1]
         self._server_sock = sock
 
         t = threading.Thread(target=self._accept_loop, daemon=True, name="TCP-accept")

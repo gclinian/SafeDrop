@@ -81,9 +81,9 @@ class SafeDropE2ETest(unittest.TestCase):
 
     def test_file_transfer(self) -> None:
         received_clip: list[ClipboardPayload] = []
-        received_state: list[TransferState] = []
+        recv_states: dict[str, TransferState] = {}
         self.bob.on_clipboard = received_clip.append
-        self.bob.on_state = lambda s: received_state.append(s) if s.direction == "recv" else None
+        self.bob.on_state = lambda s: recv_states.__setitem__(s.transfer_id, s) if s.direction == "recv" else None
 
         payload = os.urandom(150_000)  # ~150KB so we exercise multiple chunks
         src = _TEST_DOWNLOAD_DIR / "src" / "payload.bin"
@@ -97,9 +97,17 @@ class SafeDropE2ETest(unittest.TestCase):
         self.assertTrue(ok, f"transfer did not finish in time, status={state.status}")
         self.assertEqual(state.status, "done", state.error)
 
-        # Bob should have written the file into the test download dir.
-        final = _wait_for(lambda: any(p.read_bytes() == payload for p in _TEST_DOWNLOAD_DIR.glob("payload*.bin")), timeout=5)
-        self.assertTrue(final, "received file did not match payload")
+        # Look at the receiver's state directly so this is independent of which
+        # DOWNLOAD_DIR is currently patched by other test modules.
+        ok = _wait_for(
+            lambda: recv_states.get(state.transfer_id) is not None
+            and recv_states[state.transfer_id].status == "done"
+            and recv_states[state.transfer_id].save_path is not None,
+            timeout=5,
+        )
+        self.assertTrue(ok, "bob did not finish receiving")
+        recv = recv_states[state.transfer_id]
+        self.assertEqual(recv.save_path.read_bytes(), payload)
 
     def test_clipboard_transfer(self) -> None:
         received: list[ClipboardPayload] = []

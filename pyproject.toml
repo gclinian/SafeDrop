@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safedrop"
+version = "1.1.0"
+description = "Secure zero-config LAN file & clipboard sharing — Python desktop, CLI, MCP server"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "CNL Group 5" },
+]
+dependencies = [
+    "cryptography>=42",
+    "pyperclip>=1.8",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=1.0",
+]
+
+[project.scripts]
+safedrop = "safedrop.cli:main"
+safedrop-mcp = "safedrop_mcp.server:run"
+
+[tool.setuptools]
+packages = ["safedrop", "safedrop_mcp"]
