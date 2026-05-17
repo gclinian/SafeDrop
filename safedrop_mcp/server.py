@@ -123,6 +123,98 @@ def send_text(device: str, content: str, content_type: str = "text", timeout_sec
 
 
 @mcp.tool()
+def list_remote_tools(device: str, timeout_seconds: int = 10) -> str:
+    """List the tools that another SafeDrop device exposes for remote invocation.
+
+    The returned JSON array contains objects with {name, description, inputSchema}
+    — feed these back into ``call_remote_tool`` to invoke them. Only peers that
+    advertise the ``safedrop.tools`` capability will return a non-empty list.
+
+    Args:
+        device: Peer name (substring match ok) or device id from list_devices.
+        timeout_seconds: How long to wait for the peer's response.
+    """
+    assert service is not None
+    try:
+        peer = service.find_peer(device)
+    except LookupError as exc:
+        return json.dumps({"error": str(exc)})
+    try:
+        tools = service.transfer.list_remote_tools(peer, timeout=float(timeout_seconds))
+    except Exception as exc:
+        return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
+    return json.dumps({"peer": peer.name, "tools": tools}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def call_remote_tool(
+    device: str,
+    name: str,
+    arguments: dict | None = None,
+    timeout_seconds: int = 60,
+) -> str:
+    """Invoke a tool on another SafeDrop device. Returns the tool's result or an error.
+
+    Use ``list_remote_tools(device)`` first to discover what's available — every
+    peer exposes ``system_info``, ``read_clipboard``, ``write_clipboard``, and
+    (opt-in) ``run_shell`` by default.
+
+    The remote peer's authorizer can deny the call; Phase 2.0 default is allow,
+    Phase 2.1 will add a per-call confirm dialog. Every call (allowed, denied,
+    or errored) is recorded in the peer's audit log.
+
+    Args:
+        device: Peer name or id.
+        name: Tool name returned by list_remote_tools (e.g. "read_clipboard").
+        arguments: Dict of arguments matching the tool's inputSchema.
+        timeout_seconds: Max wait for the response.
+    """
+    assert service is not None
+    try:
+        peer = service.find_peer(device)
+    except LookupError as exc:
+        return json.dumps({"error": str(exc)})
+    try:
+        outcome = service.transfer.call_remote_tool(
+            peer, name=name, arguments=arguments or {}, timeout=float(timeout_seconds)
+        )
+    except Exception as exc:
+        return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
+    payload = {"peer": peer.name, "tool": name, **outcome}
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def audit_log(limit: int = 50) -> str:
+    """Return the recent cross-device tool-call audit log on this peer.
+
+    Useful for the agent (or human) to verify what cross-device actions
+    have happened: both inbound (others called us) and outbound (we called
+    others). Returns most-recent first.
+
+    Args:
+        limit: Maximum number of entries to return (default 50).
+    """
+    assert service is not None
+    rows = service.transfer.audit_log[-limit:][::-1]
+    payload = [
+        {
+            "timestamp": r.timestamp,
+            "direction": r.direction,
+            "peer_name": r.peer_name,
+            "peer_ip": r.peer_ip,
+            "tool_name": r.tool_name,
+            "arguments": r.arguments,
+            "decision": r.decision,
+            "result_summary": r.result_summary,
+            "error": r.error,
+        }
+        for r in rows
+    ]
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
 async def wait_for_drop(timeout_seconds: int = 300) -> str:
     """Block until another device drops something to this agent, then return it.
 

@@ -149,6 +149,113 @@ def cmd_wait(args: argparse.Namespace) -> int:
         service.stop()
 
 
+def cmd_tools(args: argparse.Namespace) -> int:
+    service = HeadlessSafeDrop(name_suffix="CLI")
+    service.start()
+    try:
+        peer = _wait_for_peer(service, args.device, timeout=args.wait)
+        tools = service.transfer.list_remote_tools(peer, timeout=float(args.timeout))
+    except LookupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        service.stop()
+
+    if args.json:
+        print(json.dumps({"peer": peer.name, "tools": tools}, ensure_ascii=False, indent=2))
+    else:
+        if not tools:
+            print(f"(no tools advertised by {peer.name})")
+        else:
+            print(f"Tools on {peer.name}:")
+            for t in tools:
+                desc = t.get("description", "").strip().splitlines()[0] if t.get("description") else ""
+                print(f"  {t['name']:<24}  {desc}")
+    return 0
+
+
+def cmd_call(args: argparse.Namespace) -> int:
+    arguments: dict = {}
+    if args.args:
+        try:
+            arguments = json.loads(args.args)
+        except json.JSONDecodeError as exc:
+            print(f"error: --args must be valid JSON: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(arguments, dict):
+            print("error: --args must be a JSON object", file=sys.stderr)
+            return 2
+
+    service = HeadlessSafeDrop(name_suffix="CLI")
+    service.start()
+    try:
+        peer = _wait_for_peer(service, args.device, timeout=args.wait)
+        result = service.transfer.call_remote_tool(
+            peer, name=args.tool, arguments=arguments, timeout=float(args.timeout)
+        )
+    except LookupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        service.stop()
+
+    payload = {"peer": peer.name, "tool": args.tool, **result}
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        if "error" in result:
+            print(f"error from {peer.name}: {result['error']}")
+            return 1
+        r = result.get("result")
+        if isinstance(r, (dict, list)):
+            print(json.dumps(r, ensure_ascii=False, indent=2))
+        else:
+            print(r)
+    return 0 if "error" not in result else 1
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    # Audit log lives inside a running headless peer. Spinning up an
+    # ephemeral one wouldn't see anything because each invocation has
+    # its own log. Tell the user how to use this properly.
+    print(
+        "Note: `safedrop audit` only sees this invocation's log. For the persistent\n"
+        "log of a running peer, query its MCP server (`audit_log` tool) instead.",
+        file=sys.stderr,
+    )
+    service = HeadlessSafeDrop(name_suffix="CLI")
+    service.start()
+    try:
+        rows = service.transfer.audit_log[-args.limit:][::-1]
+        if args.json:
+            print(json.dumps([{
+                "timestamp": r.timestamp,
+                "direction": r.direction,
+                "peer_name": r.peer_name,
+                "peer_ip": r.peer_ip,
+                "tool_name": r.tool_name,
+                "arguments": r.arguments,
+                "decision": r.decision,
+                "result_summary": r.result_summary,
+                "error": r.error,
+            } for r in rows], ensure_ascii=False, indent=2))
+        else:
+            if not rows:
+                print("(empty)")
+            for r in rows:
+                ts = time.strftime("%H:%M:%S", time.localtime(r.timestamp))
+                print(f"{ts}  {r.direction:>8}  {r.peer_name:<30}  {r.tool_name:<20}  {r.decision}")
+        return 0
+    finally:
+        service.stop()
+
+
 # --------------------------------------------------------------------- main ---
 
 
@@ -187,6 +294,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--timeout", type=float, default=300, help="max wait (s)")
     _json_too(p_w)
     p_w.set_defaults(func=cmd_wait)
+
+    p_t = sub.add_parser("tools", help="list the tools a peer exposes")
+    p_t.add_argument("device", help="peer name or device id")
+    p_t.add_argument("--wait", type=float, default=8.0, help="seconds to wait for peer to appear")
+    p_t.add_argument("--timeout", type=float, default=10, help="max wait for response (s)")
+    _json_too(p_t)
+    p_t.set_defaults(func=cmd_tools)
+
+    p_c = sub.add_parser("call", help="invoke a tool on a peer")
+    p_c.add_argument("device", help="peer name or device id")
+    p_c.add_argument("tool", help="tool name (see `safedrop tools`)")
+    p_c.add_argument("--args", default="", help="JSON object of arguments (e.g. '{\"content\":\"hi\"}')")
+    p_c.add_argument("--wait", type=float, default=8.0, help="seconds to wait for peer to appear")
+    p_c.add_argument("--timeout", type=float, default=60, help="max wait for response (s)")
+    _json_too(p_c)
+    p_c.set_defaults(func=cmd_call)
+
+    p_a = sub.add_parser("audit", help="show this peer's cross-device tool-call audit log")
+    p_a.add_argument("--limit", type=int, default=50)
+    _json_too(p_a)
+    p_a.set_defaults(func=cmd_audit)
 
     return p
 

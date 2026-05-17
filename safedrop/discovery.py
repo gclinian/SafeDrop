@@ -34,7 +34,11 @@ class Peer:
     ip: str
     tcp_port: int
     pubkey: str
+    capabilities: tuple[str, ...] = ()
     last_seen: float = field(default_factory=time.time)
+
+    def has_capability(self, cap: str) -> bool:
+        return cap in self.capabilities
 
 
 PeerCallback = Callable[[dict[str, Peer]], None]
@@ -67,6 +71,7 @@ class DiscoveryService:
         platform_name: str,
         tcp_port: int,
         pubkey_b64: str,
+        capabilities: tuple[str, ...] = ("safedrop.transfer",),
         on_change: PeerCallback | None = None,
     ) -> None:
         self.device_id = device_id
@@ -74,6 +79,7 @@ class DiscoveryService:
         self.platform_name = platform_name
         self.tcp_port = tcp_port
         self.pubkey_b64 = pubkey_b64
+        self.capabilities = tuple(capabilities)
         self.on_change = on_change
 
         self.local_ip = _get_outbound_ip()
@@ -127,6 +133,7 @@ class DiscoveryService:
                 "platform": self.platform_name,
                 "tcp_port": self.tcp_port,
                 "pubkey": self.pubkey_b64,
+                "capabilities": list(self.capabilities),
                 "version": VERSION,
             },
             ensure_ascii=False,
@@ -186,6 +193,11 @@ class DiscoveryService:
 
         changed = False
         if kind == "HELLO":
+            caps_field = msg.get("capabilities", [])
+            if isinstance(caps_field, list):
+                caps = tuple(str(c) for c in caps_field)
+            else:
+                caps = ()
             peer = Peer(
                 device_id=device_id,
                 name=str(msg.get("name", "unknown")),
@@ -193,6 +205,7 @@ class DiscoveryService:
                 ip=sender_ip,
                 tcp_port=int(msg.get("tcp_port", 0)),
                 pubkey=str(msg.get("pubkey", "")),
+                capabilities=caps,
             )
             if peer.tcp_port <= 0 or not peer.pubkey:
                 return

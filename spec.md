@@ -294,37 +294,80 @@ safedrop wait
 
 每次 invocation 啟一個 ephemeral peer，做事完關掉，加 `--json` 取得結構化輸出。
 
-## 16. Cross-device tools (Phase 2, not yet implemented)
+## 16. Cross-device tools (Phase 2 — implemented)
 
-目前 MCP server 只暴露 *local* SafeDrop 功能。下個 milestone 把 **遠端裝置的能力**
-動態 import 成 master agent 的 tools，每個 SafeDrop peer 可以 expose 自己的 tool registry
-（手機相機、桌面 shell、Pi 上的 GPIO…）。
+每個 SafeDrop peer 自帶一個 `ToolRegistry`（[safedrop/tools.py](safedrop/tools.py)），
+別的 peer 可以透過既有的加密 TCP channel 動態探詢並遠端執行。Master agent
+（典型上是某台桌面跑的 `safedrop-mcp` MCP server）把所有 trusted peer 的
+tools 收集起來，當作自己的延伸臂使用。
 
-在現有 protocol 上加 4 條訊息（一樣走加密 TCP frame）：
+### 16.1 Protocol additions
 
-```
-{ "type": "LIST_TOOLS", "request_id": "..." }
+Discovery HELLO 加 `capabilities` 欄位：
 
-{ "type": "TOOLS_LIST",  "request_id": "...",
-  "tools": [
-    {"name": "take_photo", "description": "...", "inputSchema": {...}},
-    ...
-  ]
+```json
+{
+  "type": "HELLO",
+  ...,
+  "capabilities": ["safedrop.transfer", "safedrop.tools"]
 }
-
-{ "type": "CALL_TOOL",   "request_id": "...",
-  "name": "take_photo", "arguments": {...} }
-
-{ "type": "CALL_TOOL_RESULT", "request_id": "...",
-  "result": {...} | "error": "..." }
 ```
 
-HELLO 加 `"capabilities": ["safedrop.transfer", "agent.tools"]`，舊版 peer 沒這欄
-就視為純傳檔 peer，向後相容。
+舊版 peer 沒這個欄位視為純傳檔 peer（向後相容）。
 
-Trust model：
+加密 TCP channel 上加 4 條新訊息類型 — 跟既有 REQUEST/CHUNK 等同樣是
+Fernet 加密的 length-prefixed JSON frame。一條 TCP 連線只跑一個 round
+（連線後第一個 encrypted frame 的 `type` 決定流程，現在分支為
+REQUEST / LIST_TOOLS / CALL_TOOL）：
 
-- 未配對 peer 的 `LIST_TOOLS` 預設拒絕
-- 配對後預設 per-call confirm（受邀裝置跳 dialog「X 想呼叫 Y，Allow / Deny」）
-- 可設 per-tool always-allow / always-deny
-- 全部 cross-device call 寫進本地 audit log，GUI 可瀏覽
+```
+sender → recv : { "type": "LIST_TOOLS", "request_id": "..." }
+recv → sender : { "type": "TOOLS_LIST", "request_id": "...",
+                  "tools": [ {"name": "...", "description": "...", "inputSchema": {...}}, ... ] }
+
+sender → recv : { "type": "CALL_TOOL", "request_id": "...",
+                  "name": "...", "arguments": {...} }
+recv → sender : { "type": "CALL_TOOL_RESULT", "request_id": "...",
+                  "result": {...}  |  "error": "..." }
+```
+
+### 16.2 Default tools shipped with every Python peer
+
+| Tool | Args | 行為 |
+| --- | --- | --- |
+| `system_info` | — | hostname / platform / machine / python version |
+| `read_clipboard` | — | 本機剪貼簿內容 |
+| `write_clipboard` | `content` | 寫入本機剪貼簿 |
+| `run_shell` | `command`, `timeout` | 跑 shell command，**預設關**；要在 peer 端設 `SAFEDROP_ALLOW_SHELL=1` 才開 |
+
+外部程式可以呼叫 `registry.register(ToolSpec(...))` 或 `@registry.tool(...)` 加自訂 tool。
+
+### 16.3 Trust model
+
+- `TransferManager.on_tool_call` 是 inbound CALL_TOOL 的 authorizer callback，
+  Phase 2.0 預設為 None（allow-all）— 等 Phase 2.1 接 GUI dialog 後變
+  per-call confirm
+- 每次 cross-device call 都寫進 `TransferManager.audit_log`（同時包含 inbound 與
+  outbound），可透過 MCP tool `audit_log()` 或 GUI 取得
+- 未知 tool 名稱、authorizer 拒絕、handler 拋例外都會回 structured error
+  並 audit 為 `denied` / `error`
+
+### 16.4 Master agent surface
+
+`safedrop-mcp` 多三個 tool：
+
+- `list_remote_tools(device, timeout_seconds?)` — 取得 peer 的 tool 清單
+- `call_remote_tool(device, name, arguments?, timeout_seconds?)` — 遠端執行
+- `audit_log(limit?)` — 看本地的 audit 記錄
+
+CLI 對等：`safedrop tools <device>` / `safedrop call <device> <tool> [--args JSON]` /
+`safedrop audit`。
+
+### 16.5 Phase 2 之後
+
+- **Phase 2.1**：把 `on_tool_call` 接到 GUI 的 Allow/Deny dialog；trusted devices 表
+  支援 per-tool always-allow / always-deny；audit log 寫到 disk
+- **Phase 2.2**：Android side 的 ToolRegistry — 加 `take_photo`、`read_clipboard`
+  等 platform-specific tool executor
+- **Phase 2.3**：MCP 端 namespace flatten — 把 `phone.take_photo` 直接出現在 master
+  agent 的 tools 清單裡（目前要走 `call_remote_tool("phone", "take_photo", ...)`）

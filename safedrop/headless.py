@@ -16,17 +16,27 @@ from typing import Any
 from .config import new_device_id
 from .crypto import Identity
 from .discovery import DiscoveryService, Peer
+from .tools import ToolRegistry, build_default_registry
 from .transfer import TransferManager, TransferState
 
 
-class HeadlessSafeDrop:
-    """One Identity + DiscoveryService + TransferManager. No GUI."""
+DEFAULT_CAPABILITIES: tuple[str, ...] = ("safedrop.transfer", "safedrop.tools")
 
-    def __init__(self, name_suffix: str = "headless") -> None:
+
+class HeadlessSafeDrop:
+    """One Identity + DiscoveryService + TransferManager + ToolRegistry. No GUI."""
+
+    def __init__(
+        self,
+        name_suffix: str = "headless",
+        tool_registry: ToolRegistry | None = None,
+    ) -> None:
         self.identity = Identity.generate()
         self.device_id = new_device_id()
         hostname = socket.gethostname()
         self.device_name = f"{hostname} ({platform.system()}, {name_suffix})"
+
+        self.tool_registry = tool_registry if tool_registry is not None else build_default_registry()
 
         # tcp_port=0 → OS picks a free port; we read it back after start().
         self.transfer = TransferManager(
@@ -34,6 +44,7 @@ class HeadlessSafeDrop:
             device_id=self.device_id,
             device_name=self.device_name,
             tcp_port=0,
+            tool_registry=self.tool_registry,
         )
 
         # No UI to click "Accept" with — inbound transfers are auto-accepted
@@ -56,6 +67,7 @@ class HeadlessSafeDrop:
             platform_name=platform.system(),
             tcp_port=self.transfer.tcp_port,
             pubkey_b64=self.identity.public_key_b64(),
+            capabilities=DEFAULT_CAPABILITIES,
         )
         self.discovery.start()
 

@@ -230,19 +230,73 @@ safedrop wait --timeout 120                  # 等別人 push 過來
 每次 invocation 跑一個 ephemeral peer 然後關掉。加 `--json` 取得結構化輸出。
 `device` 可填 peer 名稱（substring 即可）或完整 device id。
 
-### 8.5 Roadmap：cross-device tools (Phase 2)
+### 8.5 Cross-device tools (Phase 2)
 
-目前 MCP server 只暴露 local 行為。下一步要做的是把「遠端裝置的能力」動態 import：
+每個 SafeDrop peer 自帶一個 ToolRegistry，別的 peer 可以透過已加密的 TCP channel
+**動態探詢並呼叫**。Master agent（Claude Code / Cursor / …）把所有 trusted peer 的
+tools 收集起來當延伸臂用。
+
+**內建 tools**（每個 Python peer 都有）：
+
+| Tool | 行為 |
+| --- | --- |
+| `system_info` | hostname / OS / Python 版本 |
+| `read_clipboard` | 讀本機剪貼簿 |
+| `write_clipboard` | 寫本機剪貼簿（`{"content": "..."}`） |
+| `run_shell` | 跑 shell 指令 —— **預設關**，peer 端設 `SAFEDROP_ALLOW_SHELL=1` 才開 |
+
+**自訂 tool** — 把 `HeadlessSafeDrop` 換成自己的 `ToolRegistry` 即可：
+
+```python
+from safedrop.tools import ToolRegistry, register_default_tools, ToolSpec
+from safedrop.headless import HeadlessSafeDrop
+
+reg = ToolRegistry()
+register_default_tools(reg)
+reg.register(ToolSpec(
+    name="add",
+    description="Return a + b",
+    input_schema={"type": "object",
+                  "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+                  "required": ["a", "b"]},
+    handler=lambda args: {"sum": args["a"] + args["b"]},
+))
+HeadlessSafeDrop(tool_registry=reg).start()
+```
+
+**從 MCP / CLI 呼叫**：
+
+```bash
+# 從另一台 peer 看 RECV 端的 tool 清單
+.venv/bin/safedrop tools RECV
+# Tools on Mac (Darwin, RECV):
+#   system_info               Return basic info about this device...
+#   read_clipboard            Read the local clipboard...
+#   ...
+
+# 遠端執行
+.venv/bin/safedrop call RECV system_info
+# {"hostname": "Mac", "platform": "Darwin", ...}
+
+.venv/bin/safedrop call RECV write_clipboard --args '{"content":"hello"}'
+# {"status": "ok", "wrote_chars": 5}
+```
+
+從 Claude Code：
 
 ```
-Claude on Mac MCP server
-  ├── local tools:   list_devices, send_file, send_text, wait_for_drop
-  └── remote tools:  phone.take_photo, phone.read_clipboard,
-                     pi.run_shell, labpc.list_downloads, …
+> what's on my other Mac's clipboard?
+[uses list_remote_tools then call_remote_tool("Other Mac", "read_clipboard")]
+
+> set my Pi's clipboard to "hello"
+[call_remote_tool("Pi", "write_clipboard", {"content": "hello"})]
 ```
 
-每個 peer 自己宣告 tool registry，pair 過的對方可以動態看到並呼叫。
-協定設計見 [spec.md §16](spec.md#16-cross-device-tools-phase-2-not-yet-implemented)。
+**Trust + Audit**：`TransferManager.on_tool_call` callback 決定 allow/deny；每次
+cross-device call（兩端）都寫進 `audit_log`，可從 MCP tool `audit_log()` 或 CLI
+`safedrop audit` 拉。Phase 2.0 預設 allow-all，Phase 2.1 會接到 GUI dialog。
+
+完整協定設計 → [spec.md §16](spec.md#16-cross-device-tools-phase-2--implemented)。
 
 ## 9. Android client
 

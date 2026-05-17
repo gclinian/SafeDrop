@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import platform
 import socket
 import threading
@@ -38,6 +39,7 @@ from .config import CHUNK_SIZE, DOWNLOAD_DIR, TCP_PORT, VERSION
 from .crypto import Identity, Session, derive_session
 from .discovery import Peer
 from .protocol import ProtocolError, recv_json, send_json
+from .tools import ToolRegistry
 
 
 # --------------------------------------------------------------------------
@@ -108,10 +110,38 @@ class ClipboardPayload:
     content: str
 
 
+@dataclass
+class ToolCallRequest:
+    """Inbound CALL_TOOL — given to the authorizer to decide allow/deny."""
+    request_id: str
+    peer_name: str
+    peer_ip: str
+    peer_device_id: str
+    pair_code: str
+    tool_name: str
+    arguments: dict
+
+
+@dataclass
+class ToolCallAuditEntry:
+    """One row of the cross-device tool-call audit log."""
+    timestamp: float
+    direction: str           # "inbound" | "outbound"
+    peer_name: str
+    peer_ip: str
+    tool_name: str
+    arguments: dict
+    decision: str            # "allowed" | "denied" | "error"
+    result_summary: str | None = None
+    error: str | None = None
+
+
 # Callback types (all invoked from worker threads; GUI must marshal).
 RequestCallback = Callable[[IncomingRequest], None]
 StateCallback = Callable[[TransferState], None]
 ClipboardCallback = Callable[[ClipboardPayload], None]
+ToolAuthorizer = Callable[[ToolCallRequest], bool]
+AuditCallback = Callable[[ToolCallAuditEntry], None]
 
 
 # --------------------------------------------------------------------------
@@ -126,15 +156,23 @@ class TransferManager:
         device_id: str,
         device_name: str,
         tcp_port: int = TCP_PORT,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.identity = identity
         self.device_id = device_id
         self.device_name = device_name
         self.tcp_port = tcp_port
+        self.tool_registry = tool_registry
 
         self.on_request: RequestCallback | None = None
         self.on_state: StateCallback | None = None
         self.on_clipboard: ClipboardCallback | None = None
+        # Authorizer for inbound CALL_TOOL. None = allow-all (Phase 2.0
+        # default; Phase 2.1 will plug a GUI/policy prompt in here).
+        self.on_tool_call: ToolAuthorizer | None = None
+        self.on_audit: AuditCallback | None = None
+
+        self.audit_log: list[ToolCallAuditEntry] = []
 
         self._server_sock: socket.socket | None = None
         self._stop = threading.Event()
@@ -198,6 +236,7 @@ class TransferManager:
                 if hello.get("type") != "HELLO":
                     raise ProtocolError("expected HELLO")
                 peer_name = str(hello.get("name", "unknown"))
+                peer_device_id = str(hello.get("device_id", ""))
                 peer_pubkey = str(hello.get("pubkey", ""))
                 if not peer_pubkey:
                     raise ProtocolError("missing pubkey")
@@ -217,11 +256,20 @@ class TransferManager:
                     },
                 )
 
-                # ---- encrypted request ----
-                request = recv_json(sock, decrypt=session.decrypt)
-                if request.get("type") != "REQUEST":
-                    raise ProtocolError("expected REQUEST")
+                # ---- dispatch on the first encrypted message ----
+                msg = recv_json(sock, decrypt=session.decrypt)
+                msg_type = msg.get("type")
+                if msg_type == "LIST_TOOLS":
+                    self._handle_inbound_list_tools(sock, session, msg, peer_name, peer_ip)
+                    return
+                if msg_type == "CALL_TOOL":
+                    self._handle_inbound_call_tool(sock, session, msg, peer_name, peer_ip, peer_device_id)
+                    return
+                if msg_type != "REQUEST":
+                    raise ProtocolError(f"unexpected first encrypted message type {msg_type!r}")
 
+                # ---- existing REQUEST flow ----
+                request = msg
                 kind = str(request.get("kind", ""))
                 transfer_id = str(request.get("transfer_id", uuid.uuid4().hex))
 
@@ -367,6 +415,126 @@ class TransferManager:
                 return candidate
             i += 1
 
+    # ---- inbound: cross-device tools --------------------------------
+
+    def _handle_inbound_list_tools(
+        self,
+        sock: socket.socket,
+        session: Session,
+        msg: dict,
+        peer_name: str,
+        peer_ip: str,
+    ) -> None:
+        request_id = str(msg.get("request_id", ""))
+        if self.tool_registry is None:
+            tools_payload: list[dict] = []
+        else:
+            tools_payload = self.tool_registry.list_manifests()
+        send_json(
+            sock,
+            {"type": "TOOLS_LIST", "request_id": request_id, "tools": tools_payload},
+            encrypt=session.encrypt,
+        )
+
+    def _handle_inbound_call_tool(
+        self,
+        sock: socket.socket,
+        session: Session,
+        msg: dict,
+        peer_name: str,
+        peer_ip: str,
+        peer_device_id: str,
+    ) -> None:
+        request_id = str(msg.get("request_id", ""))
+        name = str(msg.get("name", ""))
+        args = msg.get("arguments") or {}
+        if not isinstance(args, dict):
+            args = {}
+
+        if self.tool_registry is None or not self.tool_registry.has(name):
+            err = f"tool not available: {name!r}"
+            send_json(
+                sock,
+                {"type": "CALL_TOOL_RESULT", "request_id": request_id, "error": err},
+                encrypt=session.encrypt,
+            )
+            self._record_audit("inbound", peer_name, peer_ip, name, args, "denied", error=err)
+            return
+
+        # Authorize.
+        req = ToolCallRequest(
+            request_id=request_id,
+            peer_name=peer_name,
+            peer_ip=peer_ip,
+            peer_device_id=peer_device_id,
+            pair_code=session.pair_code,
+            tool_name=name,
+            arguments=args,
+        )
+        allowed = True
+        if self.on_tool_call is not None:
+            try:
+                allowed = bool(self.on_tool_call(req))
+            except Exception:
+                allowed = False
+        if not allowed:
+            send_json(
+                sock,
+                {"type": "CALL_TOOL_RESULT", "request_id": request_id,
+                 "error": "denied by authorizer"},
+                encrypt=session.encrypt,
+            )
+            self._record_audit("inbound", peer_name, peer_ip, name, args, "denied")
+            return
+
+        # Execute.
+        try:
+            result = self.tool_registry.call(name, args)
+            send_json(
+                sock,
+                {"type": "CALL_TOOL_RESULT", "request_id": request_id, "result": result},
+                encrypt=session.encrypt,
+            )
+            summary = (json.dumps(result)[:120] if not isinstance(result, str) else result[:120])
+            self._record_audit("inbound", peer_name, peer_ip, name, args, "allowed", result_summary=summary)
+        except Exception as exc:
+            err = f"{type(exc).__name__}: {exc}"
+            send_json(
+                sock,
+                {"type": "CALL_TOOL_RESULT", "request_id": request_id, "error": err},
+                encrypt=session.encrypt,
+            )
+            self._record_audit("inbound", peer_name, peer_ip, name, args, "error", error=err)
+
+    def _record_audit(
+        self,
+        direction: str,
+        peer_name: str,
+        peer_ip: str,
+        tool_name: str,
+        arguments: dict,
+        decision: str,
+        result_summary: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        entry = ToolCallAuditEntry(
+            timestamp=time.time(),
+            direction=direction,
+            peer_name=peer_name,
+            peer_ip=peer_ip,
+            tool_name=tool_name,
+            arguments=arguments,
+            decision=decision,
+            result_summary=result_summary,
+            error=error,
+        )
+        self.audit_log.append(entry)
+        if self.on_audit is not None:
+            try:
+                self.on_audit(entry)
+            except Exception:
+                pass
+
     # ---- outbound side -----------------------------------------------
 
     def send_file(self, peer: Peer, path: Path) -> TransferState:
@@ -412,11 +580,11 @@ class TransferManager:
         ).start()
         return state
 
-    def _connect(self, peer: Peer, state: TransferState) -> tuple[socket.socket, Session]:
+    def _open_session(self, peer: Peer) -> tuple[socket.socket, Session]:
+        """TCP connect + plaintext HELLO/HELLO_ACK + derive a Fernet session."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(15.0)
         sock.connect((peer.ip, peer.tcp_port))
-
         send_json(
             sock,
             {
@@ -435,9 +603,67 @@ class TransferManager:
         if not peer_pubkey:
             raise ProtocolError("missing peer pubkey")
         session = derive_session(self.identity, peer_pubkey)
+        return sock, session
+
+    def _connect(self, peer: Peer, state: TransferState) -> tuple[socket.socket, Session]:
+        sock, session = self._open_session(peer)
         state.pair_code = session.pair_code
         self._emit_state(state)
         return sock, session
+
+    # ---- outbound: cross-device tools --------------------------------
+
+    def list_remote_tools(self, peer: Peer, timeout: float = 10.0) -> list[dict]:
+        """Ask `peer` for its tool manifest. Returns a list of {name, description, inputSchema}."""
+        sock, session = self._open_session(peer)
+        with sock:
+            sock.settimeout(timeout)
+            req_id = uuid.uuid4().hex
+            send_json(sock, {"type": "LIST_TOOLS", "request_id": req_id}, encrypt=session.encrypt)
+            resp = recv_json(sock, decrypt=session.decrypt)
+            if resp.get("type") != "TOOLS_LIST" or resp.get("request_id") != req_id:
+                raise ProtocolError("expected TOOLS_LIST")
+            return list(resp.get("tools") or [])
+
+    def call_remote_tool(
+        self,
+        peer: Peer,
+        name: str,
+        arguments: dict | None = None,
+        timeout: float = 60.0,
+    ) -> dict:
+        """Invoke a tool on `peer`. Returns {"result": ...} or {"error": "..."}."""
+        args = arguments or {}
+        sock, session = self._open_session(peer)
+        with sock:
+            sock.settimeout(timeout)
+            req_id = uuid.uuid4().hex
+            send_json(sock, {
+                "type": "CALL_TOOL",
+                "request_id": req_id,
+                "name": name,
+                "arguments": args,
+            }, encrypt=session.encrypt)
+            resp = recv_json(sock, decrypt=session.decrypt)
+            if resp.get("type") != "CALL_TOOL_RESULT" or resp.get("request_id") != req_id:
+                raise ProtocolError("expected CALL_TOOL_RESULT")
+
+            decision = "error" if "error" in resp else "allowed"
+            summary: str | None = None
+            if "result" in resp:
+                r = resp["result"]
+                summary = r[:120] if isinstance(r, str) else json.dumps(r, ensure_ascii=False)[:120]
+            self._record_audit(
+                direction="outbound",
+                peer_name=peer.name,
+                peer_ip=peer.ip,
+                tool_name=name,
+                arguments=args,
+                decision=decision,
+                result_summary=summary,
+                error=resp.get("error"),
+            )
+            return {k: v for k, v in resp.items() if k in ("result", "error")}
 
     def _wait_for_decision(self, sock: socket.socket, session: Session, transfer_id: str) -> str:
         sock.settimeout(180.0)

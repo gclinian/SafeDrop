@@ -100,7 +100,15 @@ class MCPProtocolTest(unittest.TestCase):
 
             self.assertEqual(
                 sorted(out["tool_names"]),
-                ["list_devices", "send_file", "send_text", "wait_for_drop"],
+                [
+                    "audit_log",
+                    "call_remote_tool",
+                    "list_devices",
+                    "list_remote_tools",
+                    "send_file",
+                    "send_text",
+                    "wait_for_drop",
+                ],
             )
 
             self.assertTrue(out["peer_matches"], f"RECV not in peers: {out['peers']}")
