@@ -55,10 +55,15 @@ async def _drive(receiver_name_substr: str) -> dict:
             await session.initialize()
 
             tools = await session.list_tools()
-            tool_names = sorted(t.name for t in tools.tools)
+            static_tool_names = sorted(t.name for t in tools.tools)
 
-            # Give discovery a moment to converge.
+            # Give discovery a moment to converge so the receiver's tools
+            # appear as namespaced entries in the next list_tools.
             await asyncio.sleep(4.0)
+
+            tools_after = await session.list_tools()
+            all_names = sorted(t.name for t in tools_after.tools)
+            namespaced = [n for n in all_names if "__" in n]
 
             ls = await session.call_tool("list_devices", {})
             ls_text = ls.content[0].text  # type: ignore[attr-defined]
@@ -77,11 +82,25 @@ async def _drive(receiver_name_substr: str) -> dict:
             send_text = send.content[0].text  # type: ignore[attr-defined]
             send_result = json.loads(send_text)
 
+            # Call a namespaced remote tool: <recv_slug>__system_info.
+            namespaced_result = None
+            recv_slug_match = None
+            if peer_matches and namespaced:
+                recv_slug_match = peer_matches[0]["slug"]
+                target = f"{recv_slug_match}__system_info"
+                if target in all_names:
+                    res = await session.call_tool(target, {})
+                    namespaced_result = json.loads(res.content[0].text)  # type: ignore[attr-defined]
+
             return {
-                "tool_names": tool_names,
+                "static_tool_names": static_tool_names,
+                "all_tool_names": all_names,
+                "namespaced": namespaced,
                 "peers": peers,
                 "peer_matches": peer_matches,
                 "send_result": send_result,
+                "recv_slug": recv_slug_match,
+                "namespaced_result": namespaced_result,
             }
 
 
@@ -98,24 +117,40 @@ class MCPProtocolTest(unittest.TestCase):
         try:
             out = asyncio.run(_drive(", RECV)"))
 
-            self.assertEqual(
-                sorted(out["tool_names"]),
-                [
-                    "audit_log",
-                    "call_remote_tool",
-                    "list_devices",
-                    "list_remote_tools",
-                    "send_file",
-                    "send_text",
-                    "wait_for_drop",
-                ],
-            )
+            STATIC = {
+                "audit_log",
+                "call_remote_tool",
+                "list_devices",
+                "list_remote_tools",
+                "send_file",
+                "send_text",
+                "wait_for_drop",
+            }
+            self.assertTrue(STATIC.issubset(set(out["static_tool_names"])),
+                            f"static tools missing: {STATIC - set(out['static_tool_names'])}")
 
             self.assertTrue(out["peer_matches"], f"RECV not in peers: {out['peers']}")
+            self.assertIn("slug", out["peers"][0],
+                          f"list_devices entry missing slug: {out['peers'][0]}")
 
+            # After convergence, RECV's tools should be namespaced into all_tool_names.
+            self.assertTrue(out["namespaced"],
+                            f"no namespaced tools — all={out['all_tool_names']}")
+            recv_namespaced = [n for n in out["namespaced"] if n.startswith(out["recv_slug"] + "__")]
+            self.assertTrue(recv_namespaced,
+                            f"no namespaced tools for RECV slug={out['recv_slug']}: {out['namespaced']}")
+            # Defaults Bob registers — these should all show up:
+            for expected in ("system_info", "read_clipboard", "write_clipboard"):
+                self.assertIn(f"{out['recv_slug']}__{expected}", out["all_tool_names"])
+
+            # The namespaced system_info call should have returned a structured result.
+            self.assertIsNotNone(out["namespaced_result"])
+            self.assertIn("result", out["namespaced_result"])
+            self.assertIn("hostname", out["namespaced_result"]["result"])
+
+            # send_text still works
             self.assertEqual(out["send_result"]["status"], "done", out["send_result"])
             self.assertEqual(out["send_result"]["kind"], "clipboard")
-
             try:
                 got = receiver._drop_queue.get(timeout=5)
             except _queue.Empty:
