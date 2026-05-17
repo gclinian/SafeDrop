@@ -20,12 +20,23 @@ import pyperclip
 from .config import DOWNLOAD_DIR, TCP_PORT, default_device_name, new_device_id
 from .crypto import Identity
 from .discovery import DiscoveryService, Peer
+from .tools import build_default_registry
 from .transfer import (
     ClipboardPayload,
     IncomingRequest,
+    ToolCallAuditEntry,
+    ToolCallRequest,
     TransferManager,
     TransferState,
 )
+from .trust import (
+    AuditWriter,
+    DECISION_ALLOW,
+    DECISION_DENY,
+    TrustPolicy,
+)
+import threading
+import time
 
 
 def _human_size(n: int) -> str:
@@ -39,6 +50,25 @@ def _human_size(n: int) -> str:
 
 def _human_speed(bps: float) -> str:
     return _human_size(int(bps)) + "/s"
+
+
+class _ToolCallGate:
+    """Tiny sync primitive for the GUI Allow/Deny dialog."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.allow = False
+        self.persist = False
+
+    def respond(self, allow: bool, persist: bool, win: tk.Toplevel | None = None) -> None:
+        self.allow = allow
+        self.persist = persist
+        self.event.set()
+        if win is not None:
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
 
 
 class SafeDropApp:
@@ -55,16 +85,26 @@ class SafeDropApp:
 
         self._build_ui()
 
+        # ---- trust + audit (Phase 2.1) ----
+        self.trust_policy = TrustPolicy()
+        self.audit_writer = AuditWriter()
+        self.tool_registry = build_default_registry()
+        self._audit_entries: list[ToolCallAuditEntry] = []
+
         # ---- backend services ----
         self.transfer = TransferManager(
             identity=self.identity,
             device_id=self.device_id,
             device_name=self.device_name,
             tcp_port=TCP_PORT,
+            tool_registry=self.tool_registry,
+            trust_policy=self.trust_policy,
         )
         self.transfer.on_request = self._on_incoming_request
         self.transfer.on_state = self._on_transfer_state
         self.transfer.on_clipboard = self._on_clipboard_received
+        self.transfer.on_tool_call = self._on_tool_call
+        self.transfer.on_audit = self._on_audit_entry
         self.transfer.start()
 
         self.discovery = DiscoveryService(
@@ -73,6 +113,7 @@ class SafeDropApp:
             platform_name=self.platform_name,
             tcp_port=TCP_PORT,
             pubkey_b64=self.identity.public_key_b64(),
+            capabilities=("safedrop.transfer", "safedrop.tools"),
             on_change=self._on_peers_changed,
         )
         self.discovery.start()
@@ -191,6 +232,25 @@ class SafeDropApp:
             text=f"Received files → {DOWNLOAD_DIR}",
             foreground="#777",
         ).pack(side="top", anchor="w", pady=(6, 0))
+
+        # ---- Audit log panel (Phase 2.1) ------------------------------
+        audit = ttk.Labelframe(right, text="Cross-device tool audit", padding=8)
+        audit.pack(side="top", fill="both", expand=False, pady=(10, 0))
+        a_cols = ("time", "dir", "peer", "tool", "decision", "summary")
+        self.audit_tree = ttk.Treeview(
+            audit, columns=a_cols, show="headings", height=5, selectmode="browse"
+        )
+        for col, label, width, anchor in [
+            ("time", "Time", 70, "w"),
+            ("dir", "↕", 70, "w"),
+            ("peer", "Peer", 130, "w"),
+            ("tool", "Tool", 130, "w"),
+            ("decision", "Decision", 80, "w"),
+            ("summary", "Result / error", 200, "w"),
+        ]:
+            self.audit_tree.heading(col, text=label)
+            self.audit_tree.column(col, width=width, anchor=anchor)
+        self.audit_tree.pack(side="top", fill="both", expand=True)
 
         # ---- footer status bar ---------------------------------------
         self.footer_var = tk.StringVar(value="")
@@ -475,6 +535,102 @@ class SafeDropApp:
             webbrowser.open(url)
         except Exception as exc:
             messagebox.showerror("SafeDrop", f"Could not open URL: {exc}")
+
+    # ------------------------------------------------------------------
+    # Cross-device tool calls (Phase 2.1)
+    # ------------------------------------------------------------------
+    def _on_tool_call(self, req: ToolCallRequest) -> bool:
+        """Worker-thread entrypoint for inbound CALL_TOOL.
+
+        Marshals onto the GUI thread to show a modal-ish dialog, then
+        blocks until the user clicks. Returns the allow/deny decision.
+        """
+        gate = _ToolCallGate()
+        self.root.after(0, lambda: self._show_tool_call_dialog(req, gate))
+        if not gate.event.wait(timeout=120.0):
+            return False  # timeout → deny
+        if gate.persist:
+            self.trust_policy.set(
+                req.peer_device_id,
+                req.tool_name,
+                DECISION_ALLOW if gate.allow else DECISION_DENY,
+            )
+        return gate.allow
+
+    def _show_tool_call_dialog(self, req: ToolCallRequest, gate: "_ToolCallGate") -> None:
+        top = tk.Toplevel(self.root)
+        top.title("Cross-device tool call")
+        top.transient(self.root)
+        top.geometry("440x340")
+        top.protocol("WM_DELETE_WINDOW", lambda: gate.respond(allow=False, persist=False, win=top))
+
+        wrap = ttk.Frame(top, padding=16)
+        wrap.pack(fill="both", expand=True)
+
+        ttk.Label(
+            wrap,
+            text=f"{req.peer_name} wants to call a tool on this device",
+            font=("Helvetica", 12, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(wrap, text=f"from {req.peer_ip}", foreground="#666").pack(anchor="w")
+
+        ttk.Separator(wrap).pack(fill="x", pady=8)
+
+        ttk.Label(wrap, text=f"🔧  {req.tool_name}", font=("Helvetica", 13)).pack(anchor="w")
+        args_preview = (
+            "(no arguments)"
+            if not req.arguments
+            else "\n".join(f"  {k} = {v!r}"[:80] for k, v in req.arguments.items())
+        )
+        args_box = tk.Text(wrap, height=4, wrap="word")
+        args_box.insert("1.0", args_preview)
+        args_box.configure(state="disabled")
+        args_box.pack(fill="x", pady=(4, 0))
+
+        ttk.Separator(wrap).pack(fill="x", pady=8)
+        ttk.Label(wrap, text="Pair code:", foreground="#666").pack(anchor="w")
+        ttk.Label(wrap, text=req.pair_code, font=("Helvetica", 18, "bold")).pack(anchor="w")
+
+        btns = ttk.Frame(wrap)
+        btns.pack(fill="x", pady=(14, 0))
+        ttk.Button(btns, text="Deny once",
+                   command=lambda: gate.respond(allow=False, persist=False, win=top)).pack(side="left")
+        ttk.Button(btns, text="Always deny",
+                   command=lambda: gate.respond(allow=False, persist=True, win=top)).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Always allow",
+                   command=lambda: gate.respond(allow=True, persist=True, win=top)).pack(side="right", padx=(6, 0))
+        ttk.Button(btns, text="Allow once",
+                   command=lambda: gate.respond(allow=True, persist=False, win=top)).pack(side="right")
+
+        top.lift()
+        top.attributes("-topmost", True)
+        top.after(200, lambda: top.attributes("-topmost", False))
+
+    def _on_audit_entry(self, entry: ToolCallAuditEntry) -> None:
+        # Persist to disk + remember in memory + refresh GUI panel.
+        try:
+            self.audit_writer.append(entry)
+        except Exception:
+            pass
+        self.root.after(0, lambda: self._append_audit_row(entry))
+
+    def _append_audit_row(self, entry: ToolCallAuditEntry) -> None:
+        self._audit_entries.append(entry)
+        if not hasattr(self, "audit_tree"):
+            return
+        ts = time.strftime("%H:%M:%S", time.localtime(entry.timestamp))
+        arrow = "↓" if entry.direction == "inbound" else "↑"
+        summary = entry.error or entry.result_summary or ""
+        self.audit_tree.insert(
+            "", 0,
+            values=(ts, f"{arrow} {entry.direction}", entry.peer_name, entry.tool_name,
+                    entry.decision, summary[:60]),
+        )
+        # Keep only recent 200 rows
+        children = self.audit_tree.get_children()
+        if len(children) > 200:
+            for iid in children[200:]:
+                self.audit_tree.delete(iid)
 
     # ------------------------------------------------------------------
     # Shutdown

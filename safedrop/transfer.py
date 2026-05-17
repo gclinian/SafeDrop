@@ -40,6 +40,7 @@ from .crypto import Identity, Session, derive_session
 from .discovery import Peer
 from .protocol import ProtocolError, recv_json, send_json
 from .tools import ToolRegistry
+from .trust import DECISION_ALLOW, DECISION_DENY, TrustPolicy
 
 
 # --------------------------------------------------------------------------
@@ -157,18 +158,20 @@ class TransferManager:
         device_name: str,
         tcp_port: int = TCP_PORT,
         tool_registry: ToolRegistry | None = None,
+        trust_policy: TrustPolicy | None = None,
     ) -> None:
         self.identity = identity
         self.device_id = device_id
         self.device_name = device_name
         self.tcp_port = tcp_port
         self.tool_registry = tool_registry
+        self.trust_policy = trust_policy
 
         self.on_request: RequestCallback | None = None
         self.on_state: StateCallback | None = None
         self.on_clipboard: ClipboardCallback | None = None
-        # Authorizer for inbound CALL_TOOL. None = allow-all (Phase 2.0
-        # default; Phase 2.1 will plug a GUI/policy prompt in here).
+        # Authorizer for inbound CALL_TOOL. If trust_policy returns "ask"
+        # (or is unset), we fall through to this callback. None = allow.
         self.on_tool_call: ToolAuthorizer | None = None
         self.on_audit: AuditCallback | None = None
 
@@ -472,11 +475,24 @@ class TransferManager:
             arguments=args,
         )
         allowed = True
-        if self.on_tool_call is not None:
+        # Step 1: persisted trust policy. "allow" / "deny" short-circuit;
+        # "ask" (or no policy) falls through to the live authorizer.
+        decision = (
+            self.trust_policy.check(peer_device_id, name)
+            if self.trust_policy is not None
+            else "ask"
+        )
+        if decision == DECISION_ALLOW:
+            allowed = True
+        elif decision == DECISION_DENY:
+            allowed = False
+        elif self.on_tool_call is not None:
             try:
                 allowed = bool(self.on_tool_call(req))
             except Exception:
                 allowed = False
+        # else: no policy, no authorizer → allow-all (headless default)
+
         if not allowed:
             send_json(
                 sock,
