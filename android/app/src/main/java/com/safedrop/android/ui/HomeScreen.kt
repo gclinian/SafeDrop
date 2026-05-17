@@ -61,10 +61,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.safedrop.android.data.SafeDropService
+import com.safedrop.android.data.TrustStore
 import com.safedrop.android.net.ClipboardPayload
 import com.safedrop.android.net.IncomingRequest
 import com.safedrop.android.net.Peer
 import com.safedrop.android.net.TCP_PORT
+import com.safedrop.android.net.ToolCallAuditEntry
+import com.safedrop.android.net.ToolCallRequest
 import com.safedrop.android.net.TransferKind
 import com.safedrop.android.net.TransferState
 import com.safedrop.android.net.TransferStatus
@@ -89,13 +92,19 @@ fun HomeScreen(service: SafeDropService) {
 
     var pendingRequest by remember { mutableStateOf<IncomingRequest?>(null) }
     var clipboardPayload by remember { mutableStateOf<ClipboardPayload?>(null) }
+    var pendingToolCall by remember { mutableStateOf<ToolCallRequest?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+
+    val auditEntries by service.transfer.audit.collectAsState()
 
     LaunchedEffect(Unit) {
         service.transfer.incoming.collect { req -> pendingRequest = req }
     }
     LaunchedEffect(Unit) {
         service.transfer.clipboardReceived.collect { payload -> clipboardPayload = payload }
+    }
+    LaunchedEffect(Unit) {
+        service.transfer.toolCallPrompts.collect { req -> pendingToolCall = req }
     }
 
     Scaffold(
@@ -155,6 +164,8 @@ fun HomeScreen(service: SafeDropService) {
             )
 
             TransfersCard(transfers.values.sortedByDescending { it.startedAtMs })
+
+            AuditCard(auditEntries.reversed().take(20))
         }
     }
 
@@ -182,6 +193,16 @@ fun HomeScreen(service: SafeDropService) {
             onDismiss = { clipboardPayload = null },
             onCopy = { copyToClipboard(context, payload.content); clipboardPayload = null },
             onOpenUrl = { openUrl(context, payload.content); clipboardPayload = null },
+        )
+    }
+
+    pendingToolCall?.let { req ->
+        ToolCallDialog(
+            request = req,
+            onRespond = { allow, persist ->
+                req.respond(allow, persist)
+                pendingToolCall = null
+            },
         )
     }
 }
@@ -493,6 +514,96 @@ private fun ClipboardReceivedDialog(
             }
         },
     )
+}
+
+@Composable
+private fun ToolCallDialog(
+    request: ToolCallRequest,
+    onRespond: (allow: Boolean, persist: Boolean) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { onRespond(false, false) },
+        title = { Text("${request.peerName} wants to call a tool") },
+        text = {
+            Column {
+                Text("from ${request.peerIp}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("🔧 ${request.toolName}", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                val argsPreview = if (request.arguments.length() == 0) "(no arguments)"
+                else request.arguments.toString(2).take(300)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(argsPreview, modifier = Modifier.padding(8.dp),
+                         fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Pair code:", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    request.pairCode,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        },
+        confirmButton = {
+            Row {
+                OutlinedButton(onClick = { onRespond(true, false) }) { Text("Allow once") }
+                Spacer(Modifier.width(6.dp))
+                Button(onClick = { onRespond(true, true) }) { Text("Always allow") }
+            }
+        },
+        dismissButton = {
+            Row {
+                OutlinedButton(onClick = { onRespond(false, false) }) { Text("Deny") }
+                Spacer(Modifier.width(6.dp))
+                TextButton(onClick = { onRespond(false, true) }) { Text("Always deny") }
+            }
+        },
+    )
+}
+
+@Composable
+private fun AuditCard(entries: List<ToolCallAuditEntry>) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Cross-device tool audit", fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            if (entries.isEmpty()) {
+                Text("No cross-device tool calls yet.",
+                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (e in entries) {
+                        val arrow = if (e.direction == "inbound") "↓" else "↑"
+                        val summary = e.error ?: e.resultSummary ?: ""
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("$arrow ${e.peerName}",
+                                 fontSize = 12.sp,
+                                 fontWeight = FontWeight.Medium,
+                                 modifier = Modifier.weight(1.4f))
+                            Text(e.toolName, fontSize = 12.sp, modifier = Modifier.weight(1.2f))
+                            Text(e.decision, fontSize = 12.sp,
+                                 color = when (e.decision) {
+                                    "allowed" -> MaterialTheme.colorScheme.primary
+                                    "denied" -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                 },
+                                 modifier = Modifier.weight(0.8f))
+                            Text(summary.take(28), fontSize = 11.sp,
+                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                 modifier = Modifier.weight(2f))
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -8,6 +8,7 @@ import com.safedrop.android.net.Peer
 import com.safedrop.android.net.TCP_PORT
 import com.safedrop.android.net.TransferManager
 import com.safedrop.android.net.VERSION
+import com.safedrop.android.net.buildDefaultRegistry
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,12 +33,16 @@ class SafeDropService(context: Context) {
         version = VERSION,
     )
 
+    val trustStore: TrustStore = TrustStore(context)
+
     val transfer: TransferManager = TransferManager(
         context = context,
         identity = identity,
         deviceId = deviceId,
         deviceName = deviceName,
         tcpPort = TCP_PORT,
+        toolRegistry = buildDefaultRegistry(context),
+        trustStore = trustStore,
     )
 
     private val _manualPeers = MutableStateFlow<List<Peer>>(emptyList())

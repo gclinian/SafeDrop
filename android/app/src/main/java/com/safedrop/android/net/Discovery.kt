@@ -35,7 +35,10 @@ data class Peer(
     val tcpPort: Int,
     val pubKeyBase64: String,
     val lastSeenMs: Long,
-)
+    val capabilities: List<String> = emptyList(),
+) {
+    fun hasCapability(cap: String): Boolean = cap in capabilities
+}
 
 /**
  * UDP-broadcast discovery for SafeDrop. Listens on DISCOVERY_PORT and
@@ -50,6 +53,7 @@ class Discovery(
     private val tcpPort: Int,
     private val publicKeyBase64: String,
     private val version: String,
+    private val capabilities: List<String> = listOf("safedrop.transfer", "safedrop.tools"),
 ) {
     private val _peers = MutableStateFlow<Map<String, Peer>>(emptyMap())
     val peers: StateFlow<Map<String, Peer>> = _peers
@@ -110,6 +114,9 @@ class Discovery(
             put("tcp_port", tcpPort)
             put("pubkey", publicKeyBase64)
             put("version", version)
+            val caps = org.json.JSONArray()
+            for (c in capabilities) caps.put(c)
+            put("capabilities", caps)
         }.toString().toByteArray(Charsets.UTF_8)
     }
 
@@ -188,6 +195,12 @@ class Discovery(
                 val port = msg.optInt("tcp_port", 0)
                 val pub = msg.optString("pubkey")
                 if (port <= 0 || pub.isEmpty()) return
+                val capsArr = msg.optJSONArray("capabilities")
+                val caps = buildList {
+                    if (capsArr != null) {
+                        for (i in 0 until capsArr.length()) add(capsArr.optString(i))
+                    }
+                }
                 val existing = current[id]
                 val peer = Peer(
                     deviceId = id,
@@ -197,6 +210,7 @@ class Discovery(
                     tcpPort = port,
                     pubKeyBase64 = pub,
                     lastSeenMs = System.currentTimeMillis(),
+                    capabilities = caps,
                 )
                 if (existing == null || existing != peer.copy(lastSeenMs = existing.lastSeenMs)) {
                     current[id] = peer

@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
@@ -87,12 +88,44 @@ data class ClipboardPayload(
     val content: String,
 )
 
+/** Inbound CALL_TOOL — handed to the UI to render an Allow/Deny dialog. */
+data class ToolCallRequest(
+    val requestId: String,
+    val peerName: String,
+    val peerIp: String,
+    val peerDeviceId: String,
+    val pairCode: String,
+    val toolName: String,
+    val arguments: org.json.JSONObject,
+) {
+    private val decision = kotlinx.coroutines.CompletableDeferred<Pair<Boolean, Boolean>>()
+    /** allow + (persist?) */
+    fun respond(allow: Boolean, persist: Boolean = false) { decision.complete(allow to persist) }
+    suspend fun await(timeoutMs: Long): Pair<Boolean, Boolean> =
+        kotlinx.coroutines.withTimeoutOrNull(timeoutMs) { decision.await() } ?: (false to false)
+}
+
+/** One row of the cross-device tool-call audit log. */
+data class ToolCallAuditEntry(
+    val timestampMs: Long,
+    val direction: String,           // "inbound" | "outbound"
+    val peerName: String,
+    val peerIp: String,
+    val toolName: String,
+    val arguments: String,           // JSON string for compactness
+    val decision: String,            // "allowed" | "denied" | "error"
+    val resultSummary: String?,
+    val error: String?,
+)
+
 class TransferManager(
     private val context: Context,
     private val identity: Identity,
     private val deviceId: String,
     private val deviceName: String,
     private val tcpPort: Int = TCP_PORT,
+    val toolRegistry: ToolRegistry? = null,
+    private val trustStore: com.safedrop.android.data.TrustStore? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var serverSocket: ServerSocket? = null
@@ -105,6 +138,14 @@ class TransferManager(
 
     private val _clipboardReceived = MutableSharedFlow<ClipboardPayload>(extraBufferCapacity = 8)
     val clipboardReceived: SharedFlow<ClipboardPayload> = _clipboardReceived
+
+    /** Inbound CALL_TOOL that needs a user decision (after policy check). */
+    private val _toolCallPrompts = MutableSharedFlow<ToolCallRequest>(extraBufferCapacity = 8)
+    val toolCallPrompts: SharedFlow<ToolCallRequest> = _toolCallPrompts
+
+    /** Cross-device tool-call audit log (most recent appended last). */
+    private val _audit = MutableStateFlow<List<ToolCallAuditEntry>>(emptyList())
+    val audit: StateFlow<List<ToolCallAuditEntry>> = _audit
 
     val downloadDir: File =
         File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "SafeDrop").apply { mkdirs() }
@@ -164,6 +205,7 @@ class TransferManager(
                 val hello = Protocol.recvJson(input)
                 require(hello.optString("type") == "HELLO") { "expected HELLO" }
                 val peerName = hello.optString("name", "unknown")
+                val peerDeviceId = hello.optString("device_id", "")
                 val peerPubKey = hello.optString("pubkey")
                 require(peerPubKey.isNotEmpty()) { "missing pubkey" }
 
@@ -180,9 +222,23 @@ class TransferManager(
                 }
                 Protocol.sendJson(out, ack)
 
+                // ---- dispatch on first encrypted message ----
+                val msg = Protocol.recvJson(input, decrypt = { session.decrypt(it) })
+                when (msg.optString("type")) {
+                    "LIST_TOOLS" -> {
+                        handleInboundListTools(out, session, msg)
+                        return@use
+                    }
+                    "CALL_TOOL" -> {
+                        handleInboundCallTool(out, session, msg, peerName, client.inetAddress?.hostAddress ?: "?", peerDeviceId)
+                        return@use
+                    }
+                    "REQUEST" -> { /* fall through to existing flow */ }
+                    else -> throw IOException("unknown encrypted message type: ${msg.optString("type")}")
+                }
+
                 // ---- REQUEST (encrypted) ----
-                val req = Protocol.recvJson(input, decrypt = { session.decrypt(it) })
-                require(req.optString("type") == "REQUEST") { "expected REQUEST" }
+                val req = msg
                 val transferId = req.optString("transfer_id", UUID.randomUUID().toString())
                 stateId = transferId
                 val kindStr = req.optString("kind")
@@ -340,6 +396,141 @@ class TransferManager(
         }
     }
 
+    // ----- inbound: cross-device tools (Phase 2.2) --------------------
+
+    private fun handleInboundListTools(
+        out: java.io.OutputStream,
+        session: Session,
+        msg: JSONObject,
+    ) {
+        val requestId = msg.optString("request_id", "")
+        val tools = toolRegistry?.listManifests() ?: org.json.JSONArray()
+        Protocol.sendJson(out, JSONObject().apply {
+            put("type", "TOOLS_LIST")
+            put("request_id", requestId)
+            put("tools", tools)
+        }, encrypt = { session.encrypt(it) })
+    }
+
+    private suspend fun handleInboundCallTool(
+        out: java.io.OutputStream,
+        session: Session,
+        msg: JSONObject,
+        peerName: String,
+        peerIp: String,
+        peerDeviceId: String,
+    ) {
+        val requestId = msg.optString("request_id", "")
+        val name = msg.optString("name", "")
+        val args = msg.optJSONObject("arguments") ?: JSONObject()
+
+        // Unknown tool — short-circuit.
+        if (toolRegistry == null || !toolRegistry.has(name)) {
+            Protocol.sendJson(out, JSONObject().apply {
+                put("type", "CALL_TOOL_RESULT")
+                put("request_id", requestId)
+                put("error", "tool not available: '$name'")
+            }, encrypt = { session.encrypt(it) })
+            recordAudit("inbound", peerName, peerIp, name, args.toString().take(200),
+                        "denied", null, "tool not available")
+            return
+        }
+
+        // Step 1: persisted policy short-circuit.
+        val ts = trustStore
+        var allowed = true
+        var consultedUi = false
+        if (ts != null) {
+            when (ts.check(peerDeviceId, name)) {
+                com.safedrop.android.data.TrustStore.ALLOW -> allowed = true
+                com.safedrop.android.data.TrustStore.DENY -> allowed = false
+                else -> consultedUi = true
+            }
+        } else {
+            consultedUi = true
+        }
+
+        // Step 2: UI prompt.
+        if (consultedUi) {
+            val prompt = ToolCallRequest(
+                requestId = requestId,
+                peerName = peerName,
+                peerIp = peerIp,
+                peerDeviceId = peerDeviceId,
+                pairCode = session.pairCode,
+                toolName = name,
+                arguments = args,
+            )
+            _toolCallPrompts.emit(prompt)
+            val (allow, persist) = prompt.await(120_000)
+            allowed = allow
+            if (persist && ts != null) {
+                ts.set(peerDeviceId, name,
+                       if (allow) com.safedrop.android.data.TrustStore.ALLOW
+                       else com.safedrop.android.data.TrustStore.DENY)
+            }
+        }
+
+        if (!allowed) {
+            Protocol.sendJson(out, JSONObject().apply {
+                put("type", "CALL_TOOL_RESULT")
+                put("request_id", requestId)
+                put("error", "denied by authorizer")
+            }, encrypt = { session.encrypt(it) })
+            recordAudit("inbound", peerName, peerIp, name, args.toString().take(200),
+                        "denied", null, null)
+            return
+        }
+
+        // Step 3: execute on the IO dispatcher (handlers may do clipboard/etc).
+        try {
+            val result = withContext(Dispatchers.Default) { toolRegistry.call(name, args) }
+            val resultJson: Any = result ?: JSONObject.NULL
+            Protocol.sendJson(out, JSONObject().apply {
+                put("type", "CALL_TOOL_RESULT")
+                put("request_id", requestId)
+                put("result", resultJson)
+            }, encrypt = { session.encrypt(it) })
+            val summary = if (result is String) result.take(120) else result.toString().take(120)
+            recordAudit("inbound", peerName, peerIp, name, args.toString().take(200),
+                        "allowed", summary, null)
+        } catch (e: Exception) {
+            val err = "${e.javaClass.simpleName}: ${e.message ?: ""}"
+            Protocol.sendJson(out, JSONObject().apply {
+                put("type", "CALL_TOOL_RESULT")
+                put("request_id", requestId)
+                put("error", err)
+            }, encrypt = { session.encrypt(it) })
+            recordAudit("inbound", peerName, peerIp, name, args.toString().take(200),
+                        "error", null, err)
+        }
+    }
+
+    private fun recordAudit(
+        direction: String,
+        peerName: String,
+        peerIp: String,
+        toolName: String,
+        arguments: String,
+        decision: String,
+        resultSummary: String?,
+        error: String?,
+    ) {
+        val entry = ToolCallAuditEntry(
+            timestampMs = System.currentTimeMillis(),
+            direction = direction,
+            peerName = peerName,
+            peerIp = peerIp,
+            toolName = toolName,
+            arguments = arguments,
+            decision = decision,
+            resultSummary = resultSummary,
+            error = error,
+        )
+        // Cap at 200 rows in memory; oldest first.
+        _audit.value = (_audit.value + entry).takeLast(200)
+    }
+
     // ----- outbound ----------------------------------------------------
 
     fun sendFile(peer: Peer, uri: Uri): TransferState {
@@ -383,13 +574,11 @@ class TransferManager(
         return state
     }
 
-    private fun connectAndHandshake(peer: Peer, state: TransferState): Pair<Socket, Session> {
+    private fun openSession(peer: Peer): Pair<Socket, Session> {
         val sock = Socket()
         sock.connect(InetSocketAddress(peer.ip, peer.tcpPort), 15_000)
         sock.soTimeout = 60_000
-        val out = sock.getOutputStream()
-        val input = sock.getInputStream()
-        Protocol.sendJson(out, JSONObject().apply {
+        Protocol.sendJson(sock.getOutputStream(), JSONObject().apply {
             put("type", "HELLO")
             put("device_id", deviceId)
             put("name", deviceName)
@@ -397,13 +586,80 @@ class TransferManager(
             put("pubkey", identity.publicKeyBase64())
             put("version", VERSION)
         })
-        val ack = Protocol.recvJson(input)
+        val ack = Protocol.recvJson(sock.getInputStream())
         require(ack.optString("type") == "HELLO_ACK") { "expected HELLO_ACK" }
         val peerPub = ack.optString("pubkey")
         require(peerPub.isNotEmpty()) { "missing peer pubkey" }
-        val session = deriveSession(identity, peerPub)
+        return sock to deriveSession(identity, peerPub)
+    }
+
+    private fun connectAndHandshake(peer: Peer, state: TransferState): Pair<Socket, Session> {
+        val (sock, session) = openSession(peer)
         update(state.transferId) { it.copy(pairCode = session.pairCode) }
         return sock to session
+    }
+
+    // ----- outbound: cross-device tools -------------------------------
+
+    /**
+     * Ask [peer] for its tool manifest. Returns a JSONArray of
+     * `{name, description, inputSchema}` entries.
+     */
+    suspend fun listRemoteTools(peer: Peer, timeoutMs: Long = 10_000): org.json.JSONArray =
+        withContext(Dispatchers.IO) {
+            val (sock, session) = openSession(peer)
+            sock.use { s ->
+                s.soTimeout = timeoutMs.toInt()
+                val requestId = UUID.randomUUID().toString()
+                Protocol.sendJson(s.getOutputStream(), JSONObject().apply {
+                    put("type", "LIST_TOOLS")
+                    put("request_id", requestId)
+                }, encrypt = { session.encrypt(it) })
+                val resp = Protocol.recvJson(s.getInputStream(), decrypt = { session.decrypt(it) })
+                require(resp.optString("type") == "TOOLS_LIST") { "expected TOOLS_LIST" }
+                resp.optJSONArray("tools") ?: org.json.JSONArray()
+            }
+        }
+
+    /**
+     * Invoke [name] on [peer]. Returns a JSONObject with either a
+     * `result` field or an `error` field.
+     */
+    suspend fun callRemoteTool(
+        peer: Peer,
+        name: String,
+        arguments: JSONObject = JSONObject(),
+        timeoutMs: Long = 60_000,
+    ): JSONObject = withContext(Dispatchers.IO) {
+        val (sock, session) = openSession(peer)
+        sock.use { s ->
+            s.soTimeout = timeoutMs.toInt()
+            val requestId = UUID.randomUUID().toString()
+            Protocol.sendJson(s.getOutputStream(), JSONObject().apply {
+                put("type", "CALL_TOOL")
+                put("request_id", requestId)
+                put("name", name)
+                put("arguments", arguments)
+            }, encrypt = { session.encrypt(it) })
+            val resp = Protocol.recvJson(s.getInputStream(), decrypt = { session.decrypt(it) })
+            require(resp.optString("type") == "CALL_TOOL_RESULT") { "expected CALL_TOOL_RESULT" }
+
+            val decision = if (resp.has("error")) "error" else "allowed"
+            val resultSummary: String? = if (resp.has("result")) {
+                val r = resp.opt("result")
+                (if (r is String) r else r.toString()).take(120)
+            } else null
+            val errMsg = if (resp.has("error")) resp.optString("error") else null
+            recordAudit(
+                "outbound", peer.name, peer.ip, name, arguments.toString().take(200),
+                decision, resultSummary, errMsg,
+            )
+
+            JSONObject().apply {
+                if (resp.has("result")) put("result", resp.opt("result"))
+                if (resp.has("error")) put("error", resp.optString("error"))
+            }
+        }
     }
 
     private fun awaitDecision(sock: Socket, session: Session, transferId: String): String {
