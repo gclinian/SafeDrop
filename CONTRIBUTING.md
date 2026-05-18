@@ -22,16 +22,22 @@ requests.
 git clone https://github.com/gclinian/SafeDrop.git
 cd SafeDrop
 
-# Python desktop / MCP server (needs a framework Python with tkinter)
-/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv .venv
+python3 -m venv .venv
 .venv/bin/pip install -e '.[mcp]'
 
-# Run the desktop GUI
-.venv/bin/python run.py
-
-# Run the MCP server (for AI agent integration)
+# Run the MCP server (works on any Python 3.10+)
 .venv/bin/safedrop-mcp --help
+
+# Run the desktop GUI (tkinter required — see note below)
+.venv/bin/python run.py
 ```
+
+> **macOS tkinter.** Only the desktop GUI needs tkinter; the CLI / MCP
+> server / tests don't. If `python3 -c "import tkinter"` fails on your
+> Mac (common with Homebrew Python), grab
+> [python.org's installer](https://www.python.org/downloads/macos/) or
+> `brew install python-tk@3.12` and build the venv with that
+> interpreter instead.
 
 For Android:
 

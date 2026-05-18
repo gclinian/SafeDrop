@@ -58,11 +58,10 @@ open-source toolkit.</sub>
 git clone https://github.com/gclinian/SafeDrop.git
 cd SafeDrop
 
-# A framework Python with tkinter is required.
-/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv .venv
+python3 -m venv .venv
 .venv/bin/pip install -e '.[mcp]'
 
-# Run the GUI on two machines on the same Wi-Fi
+# Desktop GUI on two machines on the same Wi-Fi
 .venv/bin/python run.py
 ```
 
@@ -70,6 +69,14 @@ Both peers appear in each other's *Nearby devices* list within ~10 s.
 Pick one, choose a file or paste some text, click **Send**. The other
 side gets an Allow/Deny dialog with the pair code; on Accept, the
 transfer begins.
+
+> **macOS tkinter note.** The GUI uses tkinter. On macOS, Homebrew's
+> `python3` ships without Tk — if `python3 -c "import tkinter"` fails,
+> install [python.org's distribution](https://www.python.org/downloads/macos/)
+> or `brew install python-tk@3.12` and create the venv with that
+> interpreter (e.g. `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv .venv`).
+> The **CLI + MCP server work with any Python 3.10+** — tkinter is only
+> needed for the desktop GUI.
 
 ### CLI (any shell or bash-tool agent)
 
