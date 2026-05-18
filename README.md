@@ -1,420 +1,289 @@
 # SafeDrop
 
-> CNL Group 5 Final Project — Secure Zero-Config LAN File & Clipboard Sharing Tool
-> 郭至恩、吳健賓、顏愷威、林冠辰、謝承憲、林詠宸
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-38%2F38_passing-brightgreen.svg)](#tests)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-lightgrey.svg)](#platforms)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20HTTP-orange.svg)](MCP_AGENT_GUIDE.md)
 
-SafeDrop 是一個跨平台、零設定的區網檔案 / 剪貼簿分享工具。
-位於同一個 Wi-Fi / LAN 下的兩台裝置可以**自動發現對方**，不經由雲端、
-不需帳號，即可**安全（端對端加密）**地傳送：
+> **Secure, zero-config LAN file & clipboard sharing — with a built-in
+> cross-device Model Context Protocol fabric for AI agents.**
 
-- 任意大小的檔案（chunked，顯示進度與速度）
-- 文字、URL、程式碼片段（接收端可一鍵複製 / 開啟連結）
+SafeDrop lets devices on the same Wi-Fi automatically discover each
+other and exchange data through a direct, end-to-end encrypted TCP
+connection. **No cloud, no account, no manual IP.** And because the
+same protocol drives a built-in [MCP](https://modelcontextprotocol.io/)
+server, any AI agent (Claude Code, Cursor, Goose, Cline, Hermes via
+Ollama, a cloud agent over HTTPS …) can use SafeDrop to send files,
+read clipboards, or invoke tools on **any** of your paired devices.
 
-完整設計請見 [`spec.md`](spec.md)。
+<sub>Originally a final project for NTU CN Lab Spring 2026 — now an
+open-source toolkit.</sub>
 
-## 1. Architecture at a glance
+## Table of contents
 
-```
-┌─────────────────────────────────────────────┐
-│  User Interface  (tkinter)                  │
-├─────────────────────────────────────────────┤
-│  Device Discovery  (UDP broadcast)          │  HELLO / BYE
-├─────────────────────────────────────────────┤
-│  Control Protocol  (JSON over TCP)          │  REQUEST / ACCEPT / CHUNK / …
-├─────────────────────────────────────────────┤
-│  Data Transfer  (TCP socket, chunked)       │
-├─────────────────────────────────────────────┤
-│  Security  (X25519 ECDH + Fernet AES)       │  pairing code
-└─────────────────────────────────────────────┘
-```
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Platforms](#platforms)
+- [AI agent integration](#ai-agent-integration)
+- [Architecture](#architecture)
+- [Security model](#security-model)
+- [Documentation](#documentation)
+- [Tests](#tests)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
-| 檔案 | 內容 |
+## Features
+
+| | |
 | --- | --- |
-| `safedrop/config.py` | port 號、chunk size、預設下載資料夾 |
-| `safedrop/protocol.py` | TCP 訊息 framing（4-byte length + JSON / 加密 JSON）|
-| `safedrop/crypto.py` | X25519 keypair、ECDH、Fernet session、pair code |
-| `safedrop/discovery.py` | UDP 廣播 + 接收，維護 nearby peers 表 |
-| `safedrop/transfer.py` | TCP server / client、handshake、REQUEST/ACCEPT、檔案 & 剪貼簿傳輸 |
-| `safedrop/gui.py` | tkinter 主介面、Accept/Reject 對話框、進度顯示 |
-| `safedrop/__main__.py` | `python -m safedrop` 入口 |
-| `run.py` | 直接執行的方便 launcher |
+| ⚡ **Zero-configuration discovery** | UDP broadcast (`HELLO` / `BYE`) — same-Wi-Fi devices appear automatically |
+| 🔒 **End-to-end encrypted** | X25519 ECDH per session, then Fernet (AES-128-CBC + HMAC-SHA256). 4-digit pair code derived from the shared secret for visual MITM check |
+| 📁 **Files & clipboards** | 64-KB chunked TCP, progress + speed UI; text / URL / code snippets with copy-or-open-URL receive prompt |
+| 🤝 **Receiver consent** | Every inbound transfer surfaces an Allow/Deny dialog with the pair code |
+| 🛠 **Cross-device tools** | Every peer exposes a `ToolRegistry` (`system_info` / `read_clipboard` / `write_clipboard` / `run_shell` / `take_photo` on Android); other peers can list and invoke them |
+| 🤖 **MCP server, stdio + HTTP** | Drop into Claude Code / Cursor / Goose / Cline / Claude Desktop. HTTP transport with scoped bearer tokens for remote / cloud agents |
+| 🧩 **MCP bridge** | Import any other MCP server (filesystem, github, fetch, …) — its tools become callable from every paired SafeDrop peer on the LAN |
+| ➕ **Runtime tool registration** | `register_local_tool` lets an agent add new tools at runtime via an HTTP callback URL |
+| 📜 **Trust + audit** | Per-(peer, tool) decisions persisted on disk. Allow once / Always allow / Deny once / Always deny. Audit log on all three platforms. Append-only JSONL on Python |
+| 📲 **Native apps** | Python desktop (tkinter), Android (Kotlin / Compose), iOS (Swift / SwiftUI) — all speak the same protocol byte-for-byte |
 
-## 2. Requirements
+## Quick start
 
-- Python 3.10+，**而且需要附帶 Tk 8.6 的 framework Python**
-  （macOS 內建 `/usr/bin/python3` 也可，但版本較舊；建議用
-  [python.org 的官方安裝包](https://www.python.org/downloads/) 或 `brew install python-tk`。）
-- 套件：`cryptography`, `pyperclip`（標準庫 `tkinter` 已內建）
+### Desktop (Python)
 
 ```bash
-# 建議：用 framework Python 建一個 venv
+git clone https://github.com/gclinian/SafeDrop.git
+cd SafeDrop
+
+# A framework Python with tkinter is required.
 /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
+.venv/bin/pip install -e '.[mcp]'
 
-## 3. Run
-
-兩台筆電都裝好之後，**連到同一個 Wi-Fi / LAN**，各自啟動：
-
-```bash
+# Run the GUI on two machines on the same Wi-Fi
 .venv/bin/python run.py
-# 或
-.venv/bin/python -m safedrop
 ```
 
-兩邊的「Nearby devices」清單會在 3-10 秒內自動列出對方。
+Both peers appear in each other's *Nearby devices* list within ~10 s.
+Pick one, choose a file or paste some text, click **Send**. The other
+side gets an Allow/Deny dialog with the pair code; on Accept, the
+transfer begins.
 
-### 傳檔
-
-1. 在 Sender 端的清單上點選對方
-2. 按 **Choose…** 選檔，按 **Send file**
-3. Receiver 跳出對話框，顯示對方名稱、檔案、**pair code**
-   - 兩台機器的 pair code 必須一致；如果不一致代表有 MITM
-4. Receiver 按 **Accept**，開始加密傳輸（進度條 + 速率）
-5. 完成後檔案會存到 `~/Downloads/SafeDrop/`
-   雙擊傳輸列可以在 Finder 中 reveal
-
-### 傳剪貼簿 / URL / 程式碼
-
-1. 點選對方
-2. 把內容貼到下方文字框（或直接按 **Paste from clipboard**）
-3. 選擇 Text / URL / Code，按 **Send clipboard**
-4. Receiver 按 **Accept** 之後跳出視窗，可以一鍵 **Copy to clipboard**
-   或 **Open URL**（URL 模式時）
-
-## 4. Security model
-
-1. **Discovery 廣播是明文** — 只攜帶名稱與公鑰，不洩漏內容
-2. **TCP 握手** — 雙方各自送一次 plaintext HELLO（含 X25519 公鑰）
-3. **ECDH** — 用對方公鑰 + 自己私鑰算 shared secret
-4. **HKDF-SHA256** → 32-byte Fernet 金鑰（AES-128-CBC + HMAC-SHA256）
-   → 另外導 4 位數字作為 **pair code** 供使用者目視核對
-5. **此後一切訊息（含 chunk）皆 Fernet 加密**
-6. **接收端 Accept** 之前不會有任何檔案資料外流；剪貼簿同理（先 preview）
-
-可以用 Wireshark 觀察 `tcp.port == 47891` 的封包，會看到 handshake 之後
-完全是加密內容。
-
-## 5. Protocol summary
-
-| 步驟 | 方向 | type | 加密 |
-| --- | --- | --- | --- |
-| Discovery | UDP broadcast | `HELLO` / `BYE` | 否 |
-| Handshake | sender → recv | `HELLO` (pubkey) | 否 |
-| Handshake | recv → sender | `HELLO_ACK` (pubkey + pair_code) | 否 |
-| Request  | sender → recv | `REQUEST` | 是 |
-| Decision | recv → sender | `ACCEPT` / `REJECT` | 是 |
-| File     | sender → recv | `CHUNK` × N (last 帶 `"final": true`) | 是 |
-| Clip     | sender → recv | `CLIPBOARD` (一次) | 是 |
-
-所有 TCP frame 都是 `[4-byte big-endian length][payload]`。
-
-## 6. Benchmarking transfer speed
-
-`bench.py` 用 SafeDrop 自己的傳輸引擎跑各種大小檔案，並驗證 sha256。
-
-### 本機 loopback（最快路徑，純 CPU bound：JSON + base64 + Fernet）
+### CLI (any shell or bash-tool agent)
 
 ```bash
-.venv/bin/python bench.py                                    # 預設 1KB / 100KB / 1MB / 10MB / 100MB
-.venv/bin/python bench.py local --sizes 1KB 1MB 100MB 500MB  # 自訂
+safedrop ls                                          # list nearby peers
+safedrop send-file <device> <path>                   # push a file
+safedrop send-text <device> "https://…" --type url   # push a URL
+safedrop call <device> read_clipboard                # invoke a remote tool
+safedrop wait --timeout 120                          # block until someone drops something
 ```
 
-輸出範例（M1 Mac、loopback）：
+### Android / iOS
 
-```
-      size   wall (s)   xfer (s)      MB/s  ok
---------------------------------------------------
-     1.0KB      0.013      0.013      0.08  ✓
-   100.0KB      0.013      0.013      7.28  ✓
-     1.0MB      0.030      0.013     79.80  ✓
-    10.0MB      0.148      0.135     74.24  ✓
-    50.0MB      0.715      0.702     71.21  ✓
-```
+See the [Platforms](#platforms) section for build instructions.
 
-> `wall` 含 handshake (ECDH + HELLO 來回 + Accept)，`xfer` 只算 chunk 流。
-> 小檔吞吐量被握手成本拉低；大檔大約在 70-80 MB/s（loopback、純加密成本）。
+## Platforms
 
-### 跨機器（真正的 Wi-Fi / LAN 速度）
-
-接收端：
+| Platform | Tech | Status |
+| --- | --- | --- |
+| **macOS / Linux / Windows desktop** | Python 3.10+, tkinter | ✅ files, clipboard, MCP server, CLI, trust+audit UI |
+| **Android** | Kotlin, Jetpack Compose, AGP 8.13 | ✅ files, clipboard, tools (`system_info` / `read_clipboard` / `write_clipboard` / `take_photo`), trust+audit UI |
+| **iOS** | Swift 6, SwiftUI, iOS 17+ | ✅ Phase 1 — tools (`system_info` / `read_clipboard` / `write_clipboard`), trust+audit UI. File picker on the roadmap |
 
 ```bash
-.venv/bin/python bench.py receive --port 47891
-# 會印出一行 base64 pubkey — 複製起來
+# Android
+cd android && ./gradlew installDebug
+
+# iOS (xcodegen + Xcode required)
+cd ios && xcodegen generate
+xcodebuild -project SafeDrop.xcodeproj -scheme SafeDrop \
+    -destination 'platform=iOS Simulator,name=iPhone 17' build
 ```
 
-發送端（同網段另一台）：
+## AI agent integration
+
+SafeDrop ships a Model Context Protocol server: **`safedrop-mcp`**.
+Two flavours of usage:
+
+### Local agent (stdio)
+
+Plug it into any MCP-supporting agent and the agent gets a tool surface
+that includes the peer fabric:
 
 ```bash
-.venv/bin/python bench.py send <接收端 IP> --port 47891 \
-    --peer-pubkey <貼上接收端的 pubkey> \
-    --sizes 1MB 10MB 100MB
+claude mcp add safedrop -- /path/to/.venv/bin/safedrop-mcp
 ```
 
-跨機器要傳 pubkey 是因為 bench 模式繞過 UDP discovery，純粹點對點測 TCP 吞吐量。
-（GUI 模式不用，因為 HELLO 廣播裡就帶了 pubkey。）
+What the agent sees:
 
-## 7. Troubleshooting
+```
+list_devices               # the LAN peers + slugs + capabilities
+send_file / send_text      # push to a peer
+wait_for_drop              # block until someone pushes to us
+list_remote_tools          # explicit access to a peer's tools
+call_remote_tool           # explicit invocation
+audit_log                  # local cross-device call history
+register_local_tool        # let the agent add new tools at runtime
+list_local_tools           # see dynamic + bridged tools
+pi_a3f2b1__system_info     # dynamic: any tool from a peer named "pi" (slug)
+bridge.github.create_issue # any tool from another MCP server you've bridged
+```
 
-| 現象 | 解法 |
-| --- | --- |
-| 看不到對方 | 確認都在同一 Wi-Fi；macOS 第一次跑會跳「允許接受連線」，按允許；公司 / 學校網路 (eduroam) 可能擋 UDP 廣播，目前需手動同網段 / 個人 hotspot 測試 |
-| `ModuleNotFoundError: _tkinter` | Python 沒有附 Tk；改用 framework Python 或安裝 `python-tk` |
-| Port 已被占用 | 改 `safedrop/config.py` 裡 `DISCOVERY_PORT` / `TCP_PORT` |
-
-## 8. AI agents / MCP / CLI
-
-SafeDrop 兩條 programmatic 介面，讓 AI agent 或自動化變成 LAN 上一個 SafeDrop peer。
-
-### 8.1 安裝
+### Remote agent (HTTP, scoped tokens)
 
 ```bash
-.venv/bin/pip install -e .[mcp]
-# 安裝兩個 entry point：
-#   safedrop      — CLI
-#   safedrop-mcp  — MCP stdio server
-```
+# Mint a narrow-scope, time-bounded capability token
+safedrop-mcp-tokens mint --label "cloud-agent" --ttl 86400 \
+    --scope "list_devices,send_text,phone_*__read_clipboard"
 
-### 8.2 MCP server
-
-啟動時自行生 Identity / Discovery / TransferManager，TCP 用動態 port，跟 GUI 完全解耦。
-同台機器 GUI + MCP 並存沒問題，會看到兩個 peer（`Mac (Darwin)` 與 `Mac (Darwin, MCP)`）。
-
-4 個 tools：
-
-| Tool | 用途 |
-| --- | --- |
-| `list_devices()` | 列當前 LAN 看到的 SafeDrop peer |
-| `send_file(device, path, timeout_seconds?)` | 發檔，blocking 直到 done/rejected/failed |
-| `send_text(device, content, content_type?, timeout_seconds?)` | 發 text/url/code |
-| `wait_for_drop(timeout_seconds?)` | 阻塞直到別的裝置 push 進來 |
-
-**接收端裝置的人類仍要按 Accept** — AI agent 只把「按下 Send」這一步換成「Claude 幫你呼叫」，trust model 沒退化。
-
-### 8.3 接到 Claude Code / Claude Desktop / Cursor
-
-**Claude Code：**
-
-```bash
-claude mcp add safedrop -- /Users/you/path/to/.venv/bin/safedrop-mcp
-```
-
-**Claude Desktop：** 編輯 `~/Library/Application Support/Claude/claude_desktop_config.json`：
-
-```json
-{
-  "mcpServers": {
-    "safedrop": {
-      "command": "/Users/you/path/to/.venv/bin/safedrop-mcp"
-    }
-  }
-}
-```
-
-**Cursor：** 類似 Claude Desktop，編輯 Cursor 的 MCP settings 加同樣 entry。
-
-之後在 agent 視窗講「列出附近裝置」「把這份檔傳到我手機」等指令即可。
-
-### 8.4 CLI (給 bash agent / 自動化)
-
-```bash
-safedrop ls                                  # 列 peer
-safedrop send-file <device> <path>           # 發檔
-safedrop send-text <device> "hello"          # 發文字
-safedrop send-text <device> "https://..." --type url
-cat snippet.py | safedrop send-text <device> --stdin --type code
-safedrop wait --timeout 120                  # 等別人 push 過來
-```
-
-每次 invocation 跑一個 ephemeral peer 然後關掉。加 `--json` 取得結構化輸出。
-`device` 可填 peer 名稱（substring 即可）或完整 device id。
-
-### 8.5 Per-agent policy, HTTP transport, bridging, dynamic registration
-
-See [MCP_AGENT_GUIDE.md](MCP_AGENT_GUIDE.md) for the full deep-dive — quick summary:
-
-```bash
-# Per-agent tool whitelist (multiple agents on the same machine each with their own surface)
-safedrop-mcp --allow "list_devices,phone_*__read_clipboard"
-safedrop-mcp --profile claude-readonly      # uses ~/.safedrop/mcp-profiles/<name>.json
-
-# HTTP / Streamable-MCP transport — for cloud / remote agents (with bearer-token auth)
-safedrop-mcp-tokens mint --label cloud --scope 'list_devices,send_text' --ttl 86400
+# Run the HTTP MCP server (combine with Tailscale / Cloudflare Tunnel)
 safedrop-mcp --http 127.0.0.1:47899
-
-# Bridge other MCP servers in (each tool appears as bridge.<name>.<tool>)
-echo '{"bridges":[{"name":"fs","command":"uvx","args":["mcp-server-filesystem","/Users/me/Docs"]}]}' \
-   > ~/.safedrop/bridges.json
-safedrop-mcp                                # bridges loaded automatically
-
-# Dynamic tools — agent adds new tools at runtime via an HTTP callback
-# (call register_local_tool from inside Claude Code / Cursor / etc.)
 ```
 
-This turns SafeDrop into:
-- ✅ A standard MCP server for any local agent (stdio)
-- ✅ A remote-callable MCP server over HTTP with scoped capability tokens
-- ✅ A bridge that exposes any other MCP server (filesystem, github, fetch, …)
-  to every paired SafeDrop peer on the LAN
-- ✅ A runtime-extensible tool surface (`register_local_tool`)
+The agent connects to `http://<host>:47899/mcp/` with
+`Authorization: Bearer <token>`. Tokens have fine-grained scope,
+expiry, and can be `safedrop-mcp-tokens revoke`'d instantly.
 
-### 8.6 Cross-device tools (Phase 2)
+### Per-agent policy
 
-每個 SafeDrop peer 自帶一個 ToolRegistry，別的 peer 可以透過已加密的 TCP channel
-**動態探詢並呼叫**。Master agent（Claude Code / Cursor / …）把所有 trusted peer 的
-tools 收集起來當延伸臂用。
+Run multiple `safedrop-mcp` instances side-by-side — each agent gets
+its own scope:
 
-**內建 tools**（每個 Python peer 都有）：
+```bash
+safedrop-mcp --profile claude-readonly        # ~/.safedrop/mcp-profiles/*.json
+safedrop-mcp --allow "list_devices,phone_*__read_clipboard"
+safedrop-mcp --deny "*__run_shell"
+```
 
-| Tool | 行為 |
+**See [`MCP_AGENT_GUIDE.md`](MCP_AGENT_GUIDE.md) for the full walk-through**
+covering Claude Code, Cursor, Goose, Cline, Hermes (Ollama), cloud
+agents, bridges, and dynamic registration patterns.
+
+## Architecture
+
+Five layers; the same protocol contract on all three implementations.
+
+```
+┌────────────────────────────────────────────────────┐
+│  User Interface          tkinter / Compose / SwiftUI│
+├────────────────────────────────────────────────────┤
+│  Discovery               UDP broadcast (HELLO / BYE)│
+├────────────────────────────────────────────────────┤
+│  Control protocol        JSON over TCP              │
+│                          REQUEST / ACCEPT / CHUNK   │
+│                          LIST_TOOLS / CALL_TOOL ... │
+├────────────────────────────────────────────────────┤
+│  Data transfer           TCP socket, 64 KB chunked  │
+├────────────────────────────────────────────────────┤
+│  Security                X25519 ECDH → HKDF-SHA256  │
+│                          → Fernet (AES-128 + HMAC)  │
+└────────────────────────────────────────────────────┘
+```
+
+### Repository layout
+
+```
+safedrop/         Python core (config, crypto, discovery, protocol,
+                  transfer, tools, trust, headless, gui, cli)
+safedrop_mcp/     MCP server: stdio + HTTP, policy, tokens, bridge,
+                  dynamic tool registration
+android/          Native Kotlin / Compose client (xcodegen-equiv via
+                  gradle wrapper, checked in)
+ios/              Native Swift / SwiftUI client (xcodegen-managed)
+tests/            38 Python tests covering everything above
+spec.md           Protocol specification
+MCP_AGENT_GUIDE.md       Agent integration guide
+REAL_DEVICE_TESTING.md   Manual QA checklist
+CONTRIBUTING.md   How to contribute
+CHANGELOG.md      Version history
+LICENSE           MIT
+```
+
+## Security model
+
+1. **Discovery is plaintext** but carries only `(name, pubkey, capabilities)` — no payload data.
+2. **Each TCP connection** starts with one plaintext HELLO each way carrying the X25519 public keys.
+3. **Shared secret** = X25519 ECDH; **session key** = HKDF-SHA256(shared, info=`"SafeDrop v1 fernet key"`); **pair code** = HKDF-SHA256(shared, info=`"SafeDrop v1 pair code"`)[:4 bytes] mod 10000.
+4. **Every subsequent frame** (request, ACCEPT/REJECT, chunk, tool call, result) is **Fernet-encrypted** (AES-128-CBC + HMAC-SHA256).
+5. **Receiver consent** is required for every transfer and tool call (with persistent "Always allow" / "Always deny" overrides per (peer, tool)).
+6. **MCP HTTP transport** adds bearer-token auth + per-token scope enforcement.
+
+You can verify with Wireshark — filter `tcp.port == 47891` and only the
+two HELLO frames are readable.
+
+## Documentation
+
+| Document | What's inside |
 | --- | --- |
-| `system_info` | hostname / OS / Python 版本 |
-| `read_clipboard` | 讀本機剪貼簿 |
-| `write_clipboard` | 寫本機剪貼簿（`{"content": "..."}`） |
-| `run_shell` | 跑 shell 指令 —— **預設關**，peer 端設 `SAFEDROP_ALLOW_SHELL=1` 才開 |
+| **[`spec.md`](spec.md)** | Protocol specification — every message type, framing, layer architecture |
+| **[`MCP_AGENT_GUIDE.md`](MCP_AGENT_GUIDE.md)** | Agent-integration walkthrough: stdio + HTTP + bridge + dynamic registration + per-agent policy + capability tokens, with copy-paste configs for Claude Code / Cursor / Goose / Cline / Hermes / cloud agents |
+| **[`REAL_DEVICE_TESTING.md`](REAL_DEVICE_TESTING.md)** | 9-section manual QA checklist for putting SafeDrop on real hardware across a real Wi-Fi LAN |
+| **[`CHANGELOG.md`](CHANGELOG.md)** | Per-version release notes |
+| **[`CONTRIBUTING.md`](CONTRIBUTING.md)** | Setup, style, PR checklist |
 
-**自訂 tool** — 把 `HeadlessSafeDrop` 換成自己的 `ToolRegistry` 即可：
-
-```python
-from safedrop.tools import ToolRegistry, register_default_tools, ToolSpec
-from safedrop.headless import HeadlessSafeDrop
-
-reg = ToolRegistry()
-register_default_tools(reg)
-reg.register(ToolSpec(
-    name="add",
-    description="Return a + b",
-    input_schema={"type": "object",
-                  "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
-                  "required": ["a", "b"]},
-    handler=lambda args: {"sum": args["a"] + args["b"]},
-))
-HeadlessSafeDrop(tool_registry=reg).start()
-```
-
-**從 MCP / CLI 呼叫**：
+## Tests
 
 ```bash
-# 從另一台 peer 看 RECV 端的 tool 清單
-.venv/bin/safedrop tools RECV
-# Tools on Mac (Darwin, RECV):
-#   system_info               Return basic info about this device...
-#   read_clipboard            Read the local clipboard...
-#   ...
-
-# 遠端執行
-.venv/bin/safedrop call RECV system_info
-# {"hostname": "Mac", "platform": "Darwin", ...}
-
-.venv/bin/safedrop call RECV write_clipboard --args '{"content":"hello"}'
-# {"status": "ok", "wrote_chars": 5}
+.venv/bin/python -m unittest discover -s tests
+# Ran 38 tests in ~14 s — OK
 ```
 
-從 Claude Code：
+Coverage at a glance:
 
-```
-> what's on my other Mac's clipboard?
-[uses list_remote_tools then call_remote_tool("Other Mac", "read_clipboard")]
+| Suite | Cases | What it proves |
+| --- | --- | --- |
+| `test_e2e.py` | 4 | File / clipboard / reject / pair-code on two in-process `TransferManager`s |
+| `test_mcp.py` | 5 | List devices / send-file / send-text / ambiguity / dynamic ports across two `HeadlessSafeDrop`s |
+| `test_mcp_protocol.py` | 1 | Spawns `safedrop-mcp`, drives it via the official MCP client SDK, asserts namespaced peer tools appear |
+| `test_tools.py` | 7 | Cross-device tools protocol: HELLO capabilities, LIST_TOOLS, CALL_TOOL, authorizer deny, audit log |
+| `test_trust.py` | 7 | TrustPolicy short-circuits the authorizer; persistence round-trip; AuditWriter JSONL |
+| `test_android_interop.py` | 1 | Cross-language pair-code match (Python ↔ Kotlin ↔ Swift all derive the same number) |
+| `test_android_tools_interop.py` | 2 | LIST_TOOLS / CALL_TOOL against the Android emulator (also works against the iOS Simulator with a different port) |
+| `test_policy_tokens.py` | 9 | Policy resolution + TokenStore mint/validate/revoke/expired |
+| `test_http_transport.py` | 3 | Spawns `safedrop-mcp --http`, asserts auth + scope enforcement via the official MCP HTTP client |
+| `test_dynamic_tools.py` | 2 | `register_local_tool` HTTP round-trip; MCP bridge to a third-party stdio server |
 
-> set my Pi's clipboard to "hello"
-[call_remote_tool("Pi", "write_clipboard", {"content": "hello"})]
-```
+## Roadmap
 
-**Trust + Audit**：`TransferManager.on_tool_call` callback 決定 allow/deny；每次
-cross-device call（兩端）都寫進 `audit_log`，可從 MCP tool `audit_log()` 或 CLI
-`safedrop audit` 拉。Phase 2.0 預設 allow-all，Phase 2.1 會接到 GUI dialog。
+- [x] **v1.0** — LAN file + clipboard sharing (Python + Android)
+- [x] **v1.1** — MCP server + CLI + cross-device tools protocol
+- [x] **v1.2** — `take_photo` on Android, namespace-flatten in MCP, persistent trust + audit
+- [x] **v1.3** — iOS Phase 1, MCP HTTP transport with scoped tokens, MCP bridge, runtime `register_local_tool`, Trust UI on all platforms
+- [ ] **v1.4** — iOS `take_photo` + file picker; cellular fallback; cross-device "Continuity" handoff (start writing on Mac → continue on phone with the same state)
+- [ ] **v1.5** — Notifications mirroring; cross-device input sharing (keyboard / mouse, à la Logitech Flow)
 
-完整協定設計 → [spec.md §16](spec.md#16-cross-device-tools-phase-2--implemented)。
+## Contributing
 
-## 9. Android client
+PRs, issues, and translations welcome. Please read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for development setup, the wire
+protocol contract, and the PR checklist.
 
-`android/` 是原生 Kotlin / Jetpack Compose 實作的 SafeDrop client，講同一套
-JSON-over-TCP + X25519 + Fernet 協定（spec.md §5）。同一個 Wi-Fi 下手機跟桌面
-端互看是自動發現，跨機器 / 跨平台都可以收檔、傳剪貼簿。
+### Reporting bugs
 
-### Build
+Open an issue with reproduction steps, OS / device versions, and any
+relevant log output.
 
-需要 macOS / Linux + JDK 17 + Android SDK platform 36 + build-tools 36+。
+### Security disclosures
 
-```bash
-cd android
-./gradlew assembleDebug
-# APK 落在 app/build/outputs/apk/debug/app-debug.apk
-```
+Don't open a public issue — use GitHub's private vulnerability
+reporting on this repo.
 
-第一次 build 約 1-2 分鐘（要下載 AGP、Compose 等依賴）。之後增量 build ~10s。
+## License
 
-### Install + run
+[MIT](LICENSE) © 2026 SafeDrop contributors.
 
-```bash
-# 任一已開的 AVD 或實體裝置
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.safedrop.android/.MainActivity
-```
+## Acknowledgments
 
-### Real Wi-Fi pairing (手機 ↔ 桌面)
-
-1. 兩台連到同一個 Wi-Fi，桌面端 `python run.py`，手機開 SafeDrop
-2. 雙方在 *Nearby devices* 自動看到對方（UDP HELLO 廣播）
-3. 桌面或手機任一邊發起傳送，對方按 *Accept*
-4. Pair code 雙方顯示同一組 4 位數字（從 ECDH shared secret 衍生）
-
-### Emulator pairing (`adb forward` trick)
-
-Android Emulator 用 NAT 對外，UDP 廣播跨不出 host，所以 *Nearby devices* 不會自動列出 host 上的桌面端。
-兩種繞道：
-
-**Direction A：Android → Desktop（最簡單）**
-
-```bash
-# 桌面端開接收：
-.venv/bin/python bench.py receive --port 47891
-# 印出 Receiver pubkey: <base64>...
-```
-
-在 emulator 的 SafeDrop：
-- 按 **+ Add manually**
-- IP `10.0.2.2`（emulator 對 host 的別名）、port `47891`
-- 貼上 pubkey → Add
-- 選此 peer，丟檔 / 剪貼簿過去
-
-**Direction B：Desktop → Android**
-
-```bash
-# 把 host port 48050 轉發到 emulator 的 47891：
-adb forward tcp:48050 tcp:47891
-# 桌面端 SafeDrop GUI 看不到 emulator，所以用 bench.py send：
-.venv/bin/python bench.py send 127.0.0.1 --port 48050 \
-    --peer-pubkey '<paste-android-pubkey>' \
-    --sizes 1MB
-```
-
-但 Android 那邊不會自動 accept；要在手機 UI 上手動按 *Accept*。Android 的 pubkey 印在哪？
-目前是 dev-time 才需要，可以從 `adb logcat | grep -i safedrop` 拉，或日後加一個 *"Show my pubkey"* 按鈕。
-
-### Crypto interop check
-
-```bash
-adb forward tcp:48050 tcp:47891
-.venv/bin/python tests/test_android_interop.py 127.0.0.1 48050
-```
-跑完會印兩邊各自從 ECDH 算出的 pair code，相同即代表 X25519 + HKDF + base64 + JSON framing 完全對齊。
-
-### Source layout
-
-| 路徑 | 內容 |
-| --- | --- |
-| `android/app/src/main/java/com/safedrop/android/crypto/` | `Hkdf`, `Fernet`, `Identity`, `Session`（BouncyCastle X25519、自寫 Fernet）|
-| `…/net/Protocol.kt` | TCP frame I/O，與 Python `protocol.py` 對齊 |
-| `…/net/Discovery.kt` | UDP broadcast 探測，附 `WifiManager.MulticastLock` |
-| `…/net/TransferManager.kt` | TCP server + 收發 file/clipboard，coroutine driven |
-| `…/data/SafeDropService.kt` | 流程 singleton：identity + discovery + transfer + manual peers |
-| `…/ui/HomeScreen.kt` | Compose 主畫面、incoming dialog、clipboard dialog、add-manual dialog |
-
-## 10. Development timeline (已完成)
-
-- **W1** UDP discovery + plaintext TCP prototype
-- **W2** tkinter GUI + clipboard sharing
-- **W3** Pairing + X25519/Fernet encryption
-- **W4** Integration testing + demo
+- The project started as the Spring 2026 final for NTU's **CN Lab** —
+  thanks to the course staff for the prompt that turned into this.
+- Cryptography: [Curve25519](https://en.wikipedia.org/wiki/Curve25519),
+  [HKDF](https://datatracker.ietf.org/doc/html/rfc5869),
+  [Fernet](https://github.com/fernet/spec) (we re-implement the same
+  token format on each platform).
+- [Anthropic's Model Context Protocol](https://modelcontextprotocol.io/)
+  for the tool-server standard the AI integration layer plugs into.
+- Prior art that informed the design: [LocalSend](https://localsend.org/),
+  [KDE Connect](https://kdeconnect.kde.org/), Apple Continuity.
