@@ -94,6 +94,7 @@ fun HomeScreen(service: SafeDropService) {
     var clipboardPayload by remember { mutableStateOf<ClipboardPayload?>(null) }
     var pendingToolCall by remember { mutableStateOf<ToolCallRequest?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var showTrustDialog by remember { mutableStateOf(false) }
 
     val auditEntries by service.transfer.audit.collectAsState()
 
@@ -118,6 +119,11 @@ fun HomeScreen(service: SafeDropService) {
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { showTrustDialog = true }) {
+                        Text("🔒 Trust")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -176,6 +182,13 @@ fun HomeScreen(service: SafeDropService) {
                 service.addManualPeer(name, ip, port, pub)
                 showAddDialog = false
             },
+        )
+    }
+
+    if (showTrustDialog) {
+        TrustDialog(
+            trustStore = service.trustStore,
+            onDismiss = { showTrustDialog = false },
         )
     }
 
@@ -604,6 +617,87 @@ private fun AuditCard(entries: List<ToolCallAuditEntry>) {
             }
         }
     }
+}
+
+@Composable
+private fun TrustDialog(
+    trustStore: com.safedrop.android.data.TrustStore,
+    onDismiss: () -> Unit,
+) {
+    var snapshot by remember { mutableStateOf(trustStore.snapshot()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Trusted devices") },
+        text = {
+            Column {
+                Text(
+                    "Per-(peer, tool) decisions saved by 'Always allow' / 'Always deny'. " +
+                        "Tap × to revoke an entry; future calls will ask again.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                if (snapshot.isEmpty()) {
+                    Text("(empty)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Column(
+                        modifier = Modifier.heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        for ((peerId, tools) in snapshot.entries.sortedBy { it.key }) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        peerId.take(36),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    TextButton(onClick = {
+                                        trustStore.clearPeer(peerId)
+                                        snapshot = trustStore.snapshot()
+                                    }) {
+                                        Text("Revoke all", fontSize = 11.sp)
+                                    }
+                                }
+                                for ((tool, decision) in tools.entries.sortedBy { it.key }) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(tool, fontSize = 13.sp,
+                                             modifier = Modifier.weight(1f).padding(start = 12.dp))
+                                        Text(
+                                            decision,
+                                            fontSize = 12.sp,
+                                            color = if (decision == "allow") Color(0xFF1B7F2F)
+                                                    else MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.padding(end = 8.dp),
+                                        )
+                                        TextButton(onClick = {
+                                            trustStore.clear(peerId, tool)
+                                            snapshot = trustStore.snapshot()
+                                        }) { Text("×", fontWeight = FontWeight.Bold) }
+                                    }
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("Close") } },
+        dismissButton = if (snapshot.isNotEmpty()) {
+            {
+                TextButton(onClick = {
+                    trustStore.clearAll()
+                    snapshot = trustStore.snapshot()
+                }) { Text("Clear all") }
+            }
+        } else null,
+    )
 }
 
 @Composable

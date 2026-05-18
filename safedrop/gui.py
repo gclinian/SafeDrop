@@ -144,7 +144,9 @@ class SafeDropApp:
         ).pack(side="left", padx=(10, 0))
 
         self.status_var = tk.StringVar(value="Starting…")
-        ttk.Label(header, textvariable=self.status_var, foreground="#444").pack(side="right")
+        ttk.Label(header, textvariable=self.status_var, foreground="#444").pack(side="right", padx=(0, 8))
+        ttk.Button(header, text="🔒 Manage trust",
+                   command=self._show_trust_dialog).pack(side="right", padx=(0, 6))
 
         main = ttk.Panedwindow(self.root, orient="horizontal")
         main.pack(side="top", fill="both", expand=True, padx=10, pady=(0, 6))
@@ -613,6 +615,80 @@ class SafeDropApp:
         except Exception:
             pass
         self.root.after(0, lambda: self._append_audit_row(entry))
+
+    # ------------------------------------------------------------------
+    # Trust management dialog (Phase 2.1 polish)
+    # ------------------------------------------------------------------
+    def _show_trust_dialog(self) -> None:
+        top = tk.Toplevel(self.root)
+        top.title("Trusted devices")
+        top.geometry("640x420")
+        top.transient(self.root)
+
+        wrap = ttk.Frame(top, padding=10)
+        wrap.pack(fill="both", expand=True)
+
+        ttk.Label(
+            wrap,
+            text=(
+                "Per-(peer, tool) decisions saved by 'Always allow' / 'Always deny'.\n"
+                "Select a row and press 'Revoke' to clear that entry; future calls will "
+                "ask again."
+            ),
+            foreground="#555",
+            wraplength=600,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        cols = ("peer", "tool", "decision")
+        tree = ttk.Treeview(wrap, columns=cols, show="headings", selectmode="extended", height=12)
+        tree.heading("peer", text="Peer device-id")
+        tree.heading("tool", text="Tool")
+        tree.heading("decision", text="Decision")
+        tree.column("peer", width=280, anchor="w")
+        tree.column("tool", width=180, anchor="w")
+        tree.column("decision", width=100, anchor="w")
+        tree.pack(fill="both", expand=True)
+
+        def refresh() -> None:
+            for iid in tree.get_children():
+                tree.delete(iid)
+            snap = self.trust_policy.snapshot()
+            if not snap:
+                tree.insert("", "end", values=("(empty)", "—", "—"))
+                return
+            for peer_id, tools in sorted(snap.items()):
+                for tool, decision in sorted(tools.items()):
+                    tree.insert(
+                        "", "end",
+                        iid=f"{peer_id}::{tool}",
+                        values=(peer_id[:36], tool, decision),
+                    )
+
+        def revoke_selected() -> None:
+            sel = tree.selection()
+            for iid in sel:
+                if "::" not in iid:
+                    continue
+                peer_id, tool = iid.split("::", 1)
+                self.trust_policy.clear(peer_id, tool)
+            refresh()
+
+        def revoke_peer() -> None:
+            sel = tree.selection()
+            peers = {iid.split("::", 1)[0] for iid in sel if "::" in iid}
+            for p in peers:
+                self.trust_policy.clear(p)
+            refresh()
+
+        btns = ttk.Frame(wrap)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Revoke selected entry", command=revoke_selected).pack(side="left")
+        ttk.Button(btns, text="Revoke entire peer", command=revoke_peer).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Refresh", command=refresh).pack(side="left", padx=(12, 0))
+        ttk.Button(btns, text="Close", command=top.destroy).pack(side="right")
+
+        refresh()
 
     def _append_audit_row(self, entry: ToolCallAuditEntry) -> None:
         self._audit_entries.append(entry)

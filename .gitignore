@@ -19,3 +19,11 @@ android/.idea/
 android/app/release/
 *.apk
 *.aab
+
+# iOS
+ios/SafeDrop.xcodeproj/
+ios/build/
+ios/DerivedData/
+ios/*.xcworkspace/
+ios/SafeDrop/Info.plist
+.DS_Store
