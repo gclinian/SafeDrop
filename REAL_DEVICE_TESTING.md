@@ -100,6 +100,30 @@ From an MCP-enabled client (Claude Code with `safedrop-mcp` configured, or
 - [ ] AP isolation enabled: discovery fails as expected; manual peer entry
       with known IP + pubkey still works.
 
+## 6b. Windows-specific
+
+Windows is a supported desktop platform but isn't part of the
+maintainers' CI loop today, so verify these on a real Windows box
+before tagging a release:
+
+- [ ] `py -3 -m venv .venv && .\.venv\Scripts\Activate.ps1 && pip install -e .[mcp]` succeeds in PowerShell.
+- [ ] Same install works under `cmd.exe` with `.venv\Scripts\activate.bat`.
+- [ ] First `python run.py` launch raises the **Windows Defender Firewall**
+      prompt; ticking "Private networks" lets discovery + transfers
+      reach Mac / Linux peers on the same Wi-Fi.
+- [ ] `safedrop-mcp --http 127.0.0.1:47899` listens and responds to
+      `curl http://127.0.0.1:47899/healthz`.
+- [ ] `pyperclip.copy / paste` round-trip through `write_clipboard` /
+      `read_clipboard` works (uses Win32 clipboard API under the hood,
+      no extra deps).
+- [ ] `~/.safedrop/trust.json` and `~/.safedrop/tokens.json` are created
+      under `%USERPROFILE%\.safedrop\`. The `chmod 0600` call is a no-op
+      on Windows — files inherit NTFS ACL from the user profile, which
+      is fine for single-user machines but not for shared accounts.
+- [ ] Cross-language interop with the Android emulator works the same as
+      on macOS: `adb forward tcp:48050 tcp:47891` then run
+      `python tests\test_android_interop.py 127.0.0.1 48050`.
+
 ## 7. Security spot-check
 
 - [ ] Run Wireshark on the LAN, filter `tcp.port == 47891`. After the two

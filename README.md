@@ -57,26 +57,54 @@ open-source toolkit.</sub>
 ```bash
 git clone https://github.com/gclinian/SafeDrop.git
 cd SafeDrop
-
 python3 -m venv .venv
-.venv/bin/pip install -e '.[mcp]'
-
-# Desktop GUI on two machines on the same Wi-Fi
-.venv/bin/python run.py
 ```
 
-Both peers appear in each other's *Nearby devices* list within ~10 s.
-Pick one, choose a file or paste some text, click **Send**. The other
-side gets an Allow/Deny dialog with the pair code; on Accept, the
-transfer begins.
+Then activate the venv — the exact line depends on your shell:
 
-> **macOS tkinter note.** The GUI uses tkinter. On macOS, Homebrew's
-> `python3` ships without Tk — if `python3 -c "import tkinter"` fails,
-> install [python.org's distribution](https://www.python.org/downloads/macos/)
-> or `brew install python-tk@3.12` and create the venv with that
-> interpreter (e.g. `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv .venv`).
-> The **CLI + MCP server work with any Python 3.10+** — tkinter is only
-> needed for the desktop GUI.
+```bash
+# Linux / macOS (bash / zsh)
+source .venv/bin/activate
+
+# Windows (PowerShell)
+.\.venv\Scripts\Activate.ps1
+
+# Windows (cmd.exe)
+.venv\Scripts\activate.bat
+```
+
+After activation, everything is platform-uniform:
+
+```bash
+pip install -e .[mcp]
+
+safedrop-mcp --help        # CLI + MCP server (any Python 3.10+)
+python run.py              # Desktop GUI (tkinter required, see notes)
+```
+
+Run `python run.py` on two machines on the same Wi-Fi. Both peers
+appear in each other's *Nearby devices* list within ~10 s. Pick one,
+choose a file or paste some text, click **Send**. The other side gets
+an Allow/Deny dialog with the pair code; on Accept, the transfer
+begins.
+
+> **macOS tkinter note.** Homebrew's `python3` ships without Tk — if
+> `python3 -c "import tkinter"` fails, install
+> [python.org's distribution](https://www.python.org/downloads/macos/)
+> or `brew install python-tk@3.12` and recreate the venv with that
+> interpreter (e.g.
+> `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv .venv`).
+> The **CLI + MCP server work with any Python 3.10+** — tkinter is
+> only needed for the desktop GUI.
+
+> **Windows note.** Python from [python.org](https://www.python.org/downloads/windows/)
+> includes tkinter by default — no extra setup. The first GUI / MCP
+> launch will trigger a **Windows Defender Firewall** prompt; tick
+> "Private networks" so peers on the same Wi-Fi can reach the TCP
+> listener (default port 47891) and UDP discovery (47890). Token
+> file permissions (`~/.safedrop/tokens.json`) fall back to NTFS user
+> ACLs rather than POSIX 0600, so don't share the file with other
+> Windows accounts.
 
 ### CLI (any shell or bash-tool agent)
 
@@ -96,7 +124,7 @@ See the [Platforms](#platforms) section for build instructions.
 
 | Platform | Tech | Status |
 | --- | --- | --- |
-| **macOS / Linux / Windows desktop** | Python 3.10+, tkinter | ✅ files, clipboard, MCP server, CLI, trust+audit UI |
+| **macOS / Linux / Windows desktop** | Python 3.10+, tkinter | ✅ files, clipboard, MCP server, CLI, trust+audit UI. Same code path on all three — Windows users get tkinter out-of-the-box from python.org and need to allow the app through Windows Defender Firewall on first launch |
 | **Android** | Kotlin, Jetpack Compose, AGP 8.13 | ✅ files, clipboard, tools (`system_info` / `read_clipboard` / `write_clipboard` / `take_photo`), trust+audit UI |
 | **iOS** | Swift 6, SwiftUI, iOS 17+ | ✅ Phase 1 — tools (`system_info` / `read_clipboard` / `write_clipboard`), trust+audit UI. File picker on the roadmap |
 

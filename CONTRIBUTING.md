@@ -21,23 +21,33 @@ requests.
 ```bash
 git clone https://github.com/gclinian/SafeDrop.git
 cd SafeDrop
-
 python3 -m venv .venv
-.venv/bin/pip install -e '.[mcp]'
 
-# Run the MCP server (works on any Python 3.10+)
-.venv/bin/safedrop-mcp --help
+# Activate — pick the line that matches your shell:
+source .venv/bin/activate          # Linux / macOS
+.\.venv\Scripts\Activate.ps1       # Windows PowerShell
+.venv\Scripts\activate.bat         # Windows cmd
 
-# Run the desktop GUI (tkinter required — see note below)
-.venv/bin/python run.py
+pip install -e .[mcp]
+
+safedrop-mcp --help                # CLI + MCP, any Python 3.10+
+python run.py                      # Desktop GUI (tkinter required)
 ```
 
-> **macOS tkinter.** Only the desktop GUI needs tkinter; the CLI / MCP
-> server / tests don't. If `python3 -c "import tkinter"` fails on your
-> Mac (common with Homebrew Python), grab
-> [python.org's installer](https://www.python.org/downloads/macos/) or
-> `brew install python-tk@3.12` and build the venv with that
-> interpreter instead.
+Platform notes:
+
+- **macOS** — Homebrew's `python3` ships without Tk. If
+  `python3 -c "import tkinter"` fails, install
+  [python.org's distribution](https://www.python.org/downloads/macos/)
+  or `brew install python-tk@3.12` and recreate the venv with that
+  interpreter. The CLI / MCP server / tests don't need tkinter.
+- **Linux** — most distros ship Tk in a separate package
+  (`sudo apt install python3-tk` on Debian/Ubuntu, `sudo dnf install python3-tkinter`
+  on Fedora, etc.). Again, only the GUI needs it.
+- **Windows** — Python from [python.org](https://www.python.org/downloads/windows/)
+  ships with tkinter; no extra install. Allow the app through Windows
+  Defender Firewall on first launch so peers on the same Wi-Fi can
+  reach the listener.
 
 For Android:
 

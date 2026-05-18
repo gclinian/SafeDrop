@@ -8,11 +8,20 @@ token has:
     expires_at   — Unix seconds, or None for "no expiry"
 
 Tokens are random 32-byte URL-safe strings, persisted to
-``~/.safedrop/tokens.json``. The file is created with 0o600. There's no
-revocation TTL beyond ``expires_at``; ``revoke`` simply removes a row.
+``~/.safedrop/tokens.json``. There's no revocation TTL beyond
+``expires_at``; ``revoke`` simply removes a row.
 
-For the local stdio MCP server tokens are not needed (the parent process
-is implicitly trusted). They are only enforced by the HTTP transport.
+Filesystem permissions
+~~~~~~~~~~~~~~~~~~~~~~
+On POSIX (macOS / Linux) we ``chmod 0o600`` the file so only the
+owning user can read it. On Windows the ``chmod`` is a no-op — the
+file inherits the NTFS ACL of the user's profile, which is
+single-user-readable by default but is **not** strong protection on a
+shared-account machine. Treat the file as a secret either way.
+
+For the local stdio MCP server tokens are not needed (the parent
+process is implicitly trusted). They are only enforced by the HTTP
+transport.
 """
 
 from __future__ import annotations
