@@ -292,4 +292,4 @@ needs to round-trip (and your token can be revoked instantly with
 | `safedrop-mcp-tokens list / revoke / prune` | manage tokens |
 | `safedrop ls / send-file / send-text / call / tools / wait` | CLI for bash-tool agents |
 
-See [README.md §8](README.md) for the basic stdio setup, [spec.md §15–16](spec.md) for protocol details, and `tests/test_*.py` for executable examples of every flow above.
+See [README.md §8](README.md) for the basic stdio setup, [SPEC.md §15–16](SPEC.md) for protocol details, and `tests/test_*.py` for executable examples of every flow above.

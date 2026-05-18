@@ -229,7 +229,7 @@ android/          Native Kotlin / Compose client (xcodegen-equiv via
                   gradle wrapper, checked in)
 ios/              Native Swift / SwiftUI client (xcodegen-managed)
 tests/            38 Python tests covering everything above
-spec.md           Protocol specification
+SPEC.md           Protocol specification
 MCP_AGENT_GUIDE.md       Agent integration guide
 REAL_DEVICE_TESTING.md   Manual QA checklist
 CONTRIBUTING.md   How to contribute
@@ -253,7 +253,7 @@ two HELLO frames are readable.
 
 | Document | What's inside |
 | --- | --- |
-| **[`spec.md`](spec.md)** | Protocol specification — every message type, framing, layer architecture |
+| **[`SPEC.md`](SPEC.md)** | Protocol specification — every message type, framing, layer architecture |
 | **[`MCP_AGENT_GUIDE.md`](MCP_AGENT_GUIDE.md)** | Agent-integration walkthrough: stdio + HTTP + bridge + dynamic registration + per-agent policy + capability tokens, with copy-paste configs for Claude Code / Cursor / Goose / Cline / Hermes / cloud agents |
 | **[`REAL_DEVICE_TESTING.md`](REAL_DEVICE_TESTING.md)** | 9-section manual QA checklist for putting SafeDrop on real hardware across a real Wi-Fi LAN |
 | **[`CHANGELOG.md`](CHANGELOG.md)** | Per-version release notes |

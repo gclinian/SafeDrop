@@ -76,7 +76,7 @@ safedrop_mcp/     Python MCP server: stdio + HTTP, policy, tokens, bridge
 android/          Native Kotlin / Jetpack Compose client
 ios/              Native Swift / SwiftUI client (xcodegen-managed)
 tests/            38 Python tests (unit + e2e + cross-language interop)
-spec.md           Protocol specification
+SPEC.md           Protocol specification
 MCP_AGENT_GUIDE.md      Agent integration walkthrough
 REAL_DEVICE_TESTING.md  Manual QA checklist for real-hardware deploys
 ```
@@ -87,7 +87,7 @@ The wire protocol is the **single source of truth** binding the three
 languages (Python / Kotlin / Swift). Any change that touches it must:
 
 1. Be discussed in an issue first.
-2. Update [`spec.md`](spec.md) with the new format.
+2. Update [`SPEC.md`](SPEC.md) with the new format.
 3. Land in all three implementations *in the same PR* (or sequenced
    PRs that don't break the cross-language interop tests).
 4. Include a regression case in `tests/test_*_interop.py`.
@@ -131,7 +131,7 @@ Before opening a PR:
 - [ ] `python -m unittest discover -s tests` is green
 - [ ] `android/ ./gradlew assembleDebug` succeeds
 - [ ] `cd ios && xcodebuild ... build` succeeds (if you touched Swift)
-- [ ] Protocol changes are reflected in `spec.md`
+- [ ] Protocol changes are reflected in `SPEC.md`
 - [ ] User-visible changes are mentioned in `CHANGELOG.md`
 - [ ] If you added a new dependency, it's in `pyproject.toml` (Python)
   or the relevant gradle/SPM file — not duplicated elsewhere.

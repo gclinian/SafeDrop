@@ -227,7 +227,7 @@ SafeDrop/
 ├── CHANGELOG.md               ← 版本紀錄
 ├── MCP_AGENT_GUIDE.md         ← AI agent 整合 HOWTO
 ├── REAL_DEVICE_TESTING.md     ← 實機 QA 清單
-├── spec.md                    ← 本檔（協定規格）
+├── SPEC.md                    ← 本檔（協定規格）
 ├── pyproject.toml             ← Python 套件 + entry points 的單一來源
 ├── run.py                     ← 桌面 GUI launcher
 ├── bench.py                   ← 吞吐量 benchmark
