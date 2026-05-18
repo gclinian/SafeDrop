@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy to ~/.safedrop/bridges.json and edit. Every entry must have name + command; args/env are optional. Each tool of each bridged MCP server will appear as bridge.<name>.<tool> in safedrop-mcp's tools/list.",
+  "bridges": [
+    {
+      "name": "fs",
+      "command": "uvx",
+      "args": ["mcp-server-filesystem", "/path/to/your/folder"]
+    },
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_REPLACE_ME"
+      }
+    },
+    {
+      "name": "fetch",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  ]
+}

@@ -37,6 +37,7 @@ Entry point: ``safedrop-mcp`` (installed by pyproject.toml) or
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import queue as _queue
@@ -59,8 +60,32 @@ from safedrop.headless import (
 )
 from safedrop.transfer import TransferState
 
+from .policy import Policy, resolve as resolve_policy
 
-_SERVER_VERSION = "0.2.0"
+
+_SERVER_VERSION = "0.3.0"
+
+
+# Default policy (resolved at startup). Module-level so list_tools /
+# call_tool handlers can consult it without an extra wiring layer.
+_policy: Policy = Policy()
+
+
+def _active_policy() -> Policy:
+    """Per-call effective policy.
+
+    The HTTP transport's auth middleware installs the token-bound policy
+    in a context-var so each HTTP request gets its own scope; stdio
+    falls back to the global ``_policy`` set at process startup.
+    """
+    try:
+        from .http_server import current_request_policy
+        per_req = current_request_policy()
+        if per_req is not None:
+            return per_req
+    except Exception:
+        pass
+    return _policy
 
 
 # ----------------------------------------------------- peer-slug helpers ----
@@ -115,6 +140,82 @@ async def _fetch_peer_tools(peer: Peer) -> list[dict]:
 
 
 # ----------------------------------------------------------- static tools ----
+
+
+# ----------------------------------------------------- dynamic + bridge ----
+#
+# These two registries are populated by `register_local_tool` (Phase X.3)
+# and the MCP-bridge subsystem (Phase X.4) respectively. They are kept as
+# module-level globals so the list_tools / call_tool handlers can consult
+# them without ceremony.
+
+_dynamic_tools: dict[str, dict] = {}   # name → {description, inputSchema, handler_url, secret}
+
+
+def _dynamic_tool_defs() -> list[types.Tool]:
+    return [
+        types.Tool(
+            name=name,
+            description=spec.get("description") or "",
+            inputSchema=spec.get("inputSchema") or {"type": "object", "properties": {}},
+        )
+        for name, spec in _dynamic_tools.items()
+    ]
+
+
+def _dynamic_has(name: str) -> bool:
+    return name in _dynamic_tools
+
+
+async def _dynamic_call(name: str, args: dict) -> dict:
+    import httpx
+    spec = _dynamic_tools.get(name)
+    if spec is None:
+        return {"error": f"unknown dynamic tool: {name!r}"}
+    url = spec["handler_url"]
+    headers: dict[str, str] = {}
+    if spec.get("secret"):
+        headers["Authorization"] = f"Bearer {spec['secret']}"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json={"name": name, "arguments": args}, headers=headers)
+            resp.raise_for_status()
+            return resp.json() if resp.headers.get("content-type", "").startswith("application/json") \
+                else {"result": resp.text}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+# Filled in by safedrop_mcp.bridge when bridges are configured.
+_bridge_callable: Any = None
+
+
+def set_bridge(callable_: Any) -> None:
+    """Called by safedrop_mcp.bridge.BridgeManager to install hooks."""
+    global _bridge_callable
+    _bridge_callable = callable_
+
+
+def _bridge_tool_defs() -> list[types.Tool]:
+    if _bridge_callable is None:
+        return []
+    out: list[types.Tool] = []
+    for spec in _bridge_callable.list_tool_specs():
+        out.append(types.Tool(
+            name=spec["name"],
+            description=spec.get("description") or "",
+            inputSchema=spec.get("inputSchema") or {"type": "object", "properties": {}},
+        ))
+    return out
+
+
+async def _bridge_call(name: str, args: dict) -> dict:
+    if _bridge_callable is None:
+        return {"error": "no bridges configured"}
+    return await _bridge_callable.call(name, args)
+
+
+# --------------------------------------------------------- static tools ----
 
 
 def _static_tool_defs() -> list[types.Tool]:
@@ -218,6 +319,48 @@ def _static_tool_defs() -> list[types.Tool]:
                 "properties": {"limit": {"type": "integer", "default": 50}},
             },
         ),
+        types.Tool(
+            name="register_local_tool",
+            description=(
+                "Register a new local tool that other SafeDrop peers can call. "
+                "Provide an HTTP handler URL (typically on 127.0.0.1) — SafeDrop "
+                "will POST {name, arguments} to it when a CALL_TOOL arrives, "
+                "and return the JSON response back to the caller. Optional "
+                "`secret` is sent as a bearer token so the handler can verify "
+                "the call. Tools persist for the lifetime of this MCP process."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Unique tool name."},
+                    "description": {"type": "string"},
+                    "input_schema": {"type": "object",
+                                     "description": "JSON Schema describing arguments."},
+                    "handler_url": {"type": "string",
+                                    "description": "HTTP(S) endpoint that will execute the tool."},
+                    "secret": {"type": "string",
+                               "description": "Optional bearer token sent to handler_url."},
+                },
+                "required": ["name", "handler_url"],
+            },
+        ),
+        types.Tool(
+            name="unregister_local_tool",
+            description="Remove a tool previously added with register_local_tool.",
+            inputSchema={
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        ),
+        types.Tool(
+            name="list_local_tools",
+            description=(
+                "Inspect the tools currently registered via register_local_tool "
+                "and via configured MCP bridges (see ~/.safedrop/bridges.json)."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -255,13 +398,36 @@ async def handle_list_tools() -> list[types.Tool]:
                     description=f"[{peer.name}] {t.get('description', '')}".strip(),
                     inputSchema=t.get("inputSchema") or {"type": "object", "properties": {}},
                 ))
-    return tools
+    # Bridge tools (Phase X.4) — populated by safedrop_mcp.bridge when active.
+    for bridge_tool in _bridge_tool_defs():
+        tools.append(bridge_tool)
+    # Dynamic tools (Phase X.3 register_local_tool) — owned by this process.
+    for dyn in _dynamic_tool_defs():
+        tools.append(dyn)
+    # Apply per-agent policy. Empty allow list = no restriction.
+    pol = _active_policy()
+    return [t for t in tools if pol.allow(t.name)]
 
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> Sequence[types.ContentBlock]:
     assert service is not None
     args = arguments or {}
+
+    # ---- policy ----
+    pol = _active_policy()
+    if not pol.allow(name):
+        return _text({"error": f"tool {name!r} blocked by policy (profile={pol.profile_name})"})
+
+    # ---- dynamic register_local_tool dispatch (Phase X.3) ----
+    if _dynamic_has(name):
+        result = await _dynamic_call(name, args)
+        return _text(result)
+
+    # ---- bridge dispatch (Phase X.4) ----
+    if name.startswith("bridge."):
+        result = await _bridge_call(name, args)
+        return _text(result)
 
     # ---- routed: <peer_slug>__<tool> ----
     if "__" in name:
@@ -379,37 +545,108 @@ async def handle_call_tool(name: str, arguments: dict | None) -> Sequence[types.
             for r in rows
         ])
 
+    if name == "register_local_tool":
+        tool_name = str(args.get("name") or "").strip()
+        url = str(args.get("handler_url") or "").strip()
+        if not tool_name or not url:
+            return _text({"error": "name and handler_url are required"})
+        if "__" in tool_name or tool_name.startswith("bridge.") or " " in tool_name:
+            return _text({"error": "name must not contain '__', whitespace, or start with 'bridge.'"})
+        _dynamic_tools[tool_name] = {
+            "description": str(args.get("description") or "").strip(),
+            "inputSchema": args.get("input_schema") or {"type": "object", "properties": {}},
+            "handler_url": url,
+            "secret": args.get("secret"),
+        }
+        return _text({"status": "registered", "name": tool_name})
+
+    if name == "unregister_local_tool":
+        tool_name = str(args.get("name") or "").strip()
+        existed = _dynamic_tools.pop(tool_name, None) is not None
+        return _text({"status": "removed" if existed else "not_found", "name": tool_name})
+
+    if name == "list_local_tools":
+        dyn = [{"name": k, **{kk: vv for kk, vv in v.items() if kk != "secret"}}
+               for k, v in _dynamic_tools.items()]
+        bridges = []
+        if _bridge_callable is not None:
+            bridges = _bridge_callable.list_tool_specs()
+        return _text({"dynamic": dyn, "bridges": bridges})
+
     return _text({"error": f"unknown tool {name!r}"})
 
 
 # ----------------------------------------------------------------- main ----
 
 
-async def _main_async() -> None:
-    global service
-    service = HeadlessSafeDrop()
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="safedrop-mcp",
+                                description="SafeDrop Model Context Protocol server")
+    p.add_argument("--allow", help="Comma-separated allowlist of tool-name globs "
+                                     "(also reads SAFEDROP_MCP_ALLOWED_TOOLS).")
+    p.add_argument("--deny", help="Comma-separated denylist of globs "
+                                    "(also reads SAFEDROP_MCP_DENIED_TOOLS).")
+    p.add_argument("--profile", help="Name of profile in ~/.safedrop/mcp-profiles/ "
+                                      "(also reads SAFEDROP_MCP_PROFILE).")
+    p.add_argument("--name-suffix", help="Override the peer-name suffix (default: 'MCP').")
+    p.add_argument("--bridges", help="Path to a JSON file listing other MCP servers "
+                                       "to bridge (default ~/.safedrop/bridges.json).")
+    p.add_argument("--no-bridges", action="store_true",
+                   help="Disable MCP bridging even if a bridges.json exists.")
+    p.add_argument("--http", metavar="HOST:PORT",
+                   help="Run an HTTP/Streamable-MCP server on this address instead "
+                        "of stdio. Token auth required (see safedrop-mcp-tokens).")
+    return p
+
+
+async def _main_async(args: argparse.Namespace) -> None:
+    global service, _policy
+    _policy = resolve_policy(
+        allow_arg=args.allow,
+        deny_arg=args.deny,
+        profile_arg=args.profile,
+    )
+    name_suffix = args.name_suffix or _policy.name_suffix or "MCP"
+    service = HeadlessSafeDrop(name_suffix=name_suffix)
     service.start()
+    # Configure MCP bridges (Phase X.4) if requested.
+    bridge_mgr = None
+    if not args.no_bridges:
+        from .bridge import BridgeManager
+        bridge_mgr = BridgeManager.from_config(args.bridges)
+        if bridge_mgr is not None:
+            set_bridge(bridge_mgr)
+            await bridge_mgr.start()
     try:
-        async with stdio_server() as (read, write):
-            await server.run(
-                read,
-                write,
-                InitializationOptions(
-                    server_name="safedrop",
-                    server_version=_SERVER_VERSION,
-                    capabilities=server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
+        if args.http:
+            from .http_server import serve_http
+            host, _, port = args.http.partition(":")
+            await serve_http(server, host=host or "127.0.0.1", port=int(port or 47899))
+        else:
+            async with stdio_server() as (read, write):
+                await server.run(
+                    read,
+                    write,
+                    InitializationOptions(
+                        server_name="safedrop",
+                        server_version=_SERVER_VERSION,
+                        capabilities=server.get_capabilities(
+                            notification_options=NotificationOptions(),
+                            experimental_capabilities={},
+                        ),
                     ),
-                ),
-            )
+                )
     finally:
+        if bridge_mgr is not None:
+            await bridge_mgr.stop()
         service.stop()
 
 
-def run() -> None:
+def run(argv: list[str] | None = None) -> None:
     """Entry point used by the ``safedrop-mcp`` console script."""
-    asyncio.run(_main_async())
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    asyncio.run(_main_async(args))
 
 
 if __name__ == "__main__":

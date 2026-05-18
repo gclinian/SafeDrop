@@ -230,7 +230,36 @@ safedrop wait --timeout 120                  # 等別人 push 過來
 每次 invocation 跑一個 ephemeral peer 然後關掉。加 `--json` 取得結構化輸出。
 `device` 可填 peer 名稱（substring 即可）或完整 device id。
 
-### 8.5 Cross-device tools (Phase 2)
+### 8.5 Per-agent policy, HTTP transport, bridging, dynamic registration
+
+See [MCP_AGENT_GUIDE.md](MCP_AGENT_GUIDE.md) for the full deep-dive — quick summary:
+
+```bash
+# Per-agent tool whitelist (multiple agents on the same machine each with their own surface)
+safedrop-mcp --allow "list_devices,phone_*__read_clipboard"
+safedrop-mcp --profile claude-readonly      # uses ~/.safedrop/mcp-profiles/<name>.json
+
+# HTTP / Streamable-MCP transport — for cloud / remote agents (with bearer-token auth)
+safedrop-mcp-tokens mint --label cloud --scope 'list_devices,send_text' --ttl 86400
+safedrop-mcp --http 127.0.0.1:47899
+
+# Bridge other MCP servers in (each tool appears as bridge.<name>.<tool>)
+echo '{"bridges":[{"name":"fs","command":"uvx","args":["mcp-server-filesystem","/Users/me/Docs"]}]}' \
+   > ~/.safedrop/bridges.json
+safedrop-mcp                                # bridges loaded automatically
+
+# Dynamic tools — agent adds new tools at runtime via an HTTP callback
+# (call register_local_tool from inside Claude Code / Cursor / etc.)
+```
+
+This turns SafeDrop into:
+- ✅ A standard MCP server for any local agent (stdio)
+- ✅ A remote-callable MCP server over HTTP with scoped capability tokens
+- ✅ A bridge that exposes any other MCP server (filesystem, github, fetch, …)
+  to every paired SafeDrop peer on the LAN
+- ✅ A runtime-extensible tool surface (`register_local_tool`)
+
+### 8.6 Cross-device tools (Phase 2)
 
 每個 SafeDrop peer 自帶一個 ToolRegistry，別的 peer 可以透過已加密的 TCP channel
 **動態探詢並呼叫**。Master agent（Claude Code / Cursor / …）把所有 trusted peer 的
