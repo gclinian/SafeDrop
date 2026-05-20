@@ -124,6 +124,31 @@ forwarded port. They are the gold standard for byte-for-byte compat.
   Swift's cooperative thread pool. Follow that pattern for any new
   network code.
 
+## Releases
+
+The release flow is **driven by the version field in `pyproject.toml`**.
+
+To ship a new version:
+
+1. Bump `version` in `pyproject.toml` (e.g. `1.3.0` → `1.4.0`).
+2. Add a matching `## [1.4.0] — YYYY-MM-DD` section to `CHANGELOG.md`
+   (Keep-a-Changelog format).
+3. `git commit && git push origin main`.
+
+That's it. The `.github/workflows/release.yml` Action on `macos-14`
+sees the pyproject change, runs `./scripts/release.sh`, which:
+
+- aborts with no-op if the tag already exists,
+- runs the full test suite,
+- builds `SafeDrop-ios-<version>-unsigned.ipa`, `SafeDrop-android-<version>-debug.apk`, Python wheel + sdist,
+- creates `v<version>` tag,
+- creates a GitHub Release with the four artifacts and the
+  CHANGELOG section as release notes.
+
+To release locally instead, run `./scripts/release.sh` from your own
+machine. `./scripts/release.sh --dry-run` previews the plan without
+side effects (`--force` re-releases the same version).
+
 ## Pull request checklist
 
 Before opening a PR:

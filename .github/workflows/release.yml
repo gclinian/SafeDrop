@@ -1,0 +1,82 @@
+name: Release
+
+# Fires on any push to main that touches pyproject.toml (the canonical
+# version source). The actual decision to release happens inside
+# scripts/release.sh — if the version in pyproject.toml already matches
+# a tag, the script exits cleanly and the run becomes a ~30 s no-op.
+#
+# Also exposed as a manual trigger so you can force-rerun from the
+# Actions tab without bumping the version.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "CHANGELOG.md"
+      - "scripts/release.sh"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push tags + create releases
+
+jobs:
+  release:
+    name: Build IPA + APK + wheels and publish GitHub Release
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout (with full history for tag detection)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up JDK 17 (for Android Gradle Plugin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0 platform-tools"
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Install Python deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e '.[mcp]' build
+
+      - name: Run release.sh (auto-skips if tag already exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/release.sh
+
+      - name: Summarise
+        if: always()
+        run: |
+          if gh release view "v$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" >/dev/null 2>&1; then
+            echo "Release page:" >> "$GITHUB_STEP_SUMMARY"
+            gh release view "v$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')" --json url -q .url >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_No release was created on this run._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
