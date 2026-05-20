@@ -28,3 +28,7 @@ ios/DerivedData/
 ios/*.xcworkspace/
 ios/SafeDrop/Info.plist
 .DS_Store
+
+# Top-level dist/ for combined release artifacts (IPA + APK + sdist/wheel)
+/dist/
+*.egg-info/
