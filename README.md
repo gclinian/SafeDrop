@@ -132,11 +132,23 @@ See the [Platforms](#platforms) section for build instructions.
 # Android
 cd android && ./gradlew installDebug
 
-# iOS (xcodegen + Xcode required)
+# iOS (xcodegen + Xcode required) — Simulator
 cd ios && xcodegen generate
 xcodebuild -project SafeDrop.xcodeproj -scheme SafeDrop \
     -destination 'platform=iOS Simulator,name=iPhone 17' build
+
+# iOS — build a redistributable unsigned IPA
+./ios/scripts/build-ipa.sh         # → ios/dist/SafeDrop-<version>-unsigned.ipa
 ```
+
+> **Distributing the iOS app to other people** is non-trivial because
+> Apple doesn't allow handing over a signed `.ipa` the way Android
+> allows handing over an `.apk`. The recommended free path is the
+> unsigned IPA produced above + recipients sideload with their own
+> Apple ID via [AltStore](https://altstore.io/) or
+> [Sideloadly](https://sideloadly.io/). For TestFlight / proper
+> ad-hoc distribution you need the $99/year Apple Developer Program.
+> Full guide: [`ios/DISTRIBUTION.md`](ios/DISTRIBUTION.md).
 
 ## AI agent integration
 

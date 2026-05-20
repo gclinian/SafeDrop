@@ -23,6 +23,7 @@ android/app/release/
 # iOS
 ios/SafeDrop.xcodeproj/
 ios/build/
+ios/dist/
 ios/DerivedData/
 ios/*.xcworkspace/
 ios/SafeDrop/Info.plist
