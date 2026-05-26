@@ -24,7 +24,10 @@ permissions:
 jobs:
   release:
     name: Build IPA + APK + wheels and publish GitHub Release
-    runs-on: macos-14
+    # macos-15 ships Xcode 16+, which reads the project format (77) that
+    # the local xcodegen produces. macos-14 (Xcode 15) fails with
+    # "future Xcode project file format" on read.
+    runs-on: macos-15
 
     steps:
       - name: Checkout (with full history for tag detection)
