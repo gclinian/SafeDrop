@@ -299,8 +299,11 @@ Coverage at a glance:
 - [x] **v1.1** — MCP server + CLI + cross-device tools protocol
 - [x] **v1.2** — `take_photo` on Android, namespace-flatten in MCP, persistent trust + audit
 - [x] **v1.3** — iOS Phase 1, MCP HTTP transport with scoped tokens, MCP bridge, runtime `register_local_tool`, Trust UI on all platforms
-- [ ] **v1.4** — iOS `take_photo` + file picker; cellular fallback; cross-device "Continuity" handoff (start writing on Mac → continue on phone with the same state)
-- [ ] **v1.5** — Notifications mirroring; cross-device input sharing (keyboard / mouse, à la Logitech Flow)
+- [ ] **v1.4** — `safedrop_agent` headless desktop bot: phone (or any peer) sends text via SafeDrop → on-device Anthropic-SDK loop replies via SafeDrop, with per-peer conversation isolation, slash commands (`/reset`, `/tools`), launchd / systemd unit files; iOS file picker (send-from-iPhone)
+- [ ] **v1.5** — Multi-agent mesh: built-in `agent_bus` MCP tools (`send_message`, `recv_messages`, `list_agents`), persistent agent identity (`~/.safedrop/agent_id.json` survives MCP restarts), streaming channel over Streamable-HTTP for long-running sessions; iOS `take_photo` (Phase 2)
+- [ ] **v1.6** — Real Continuity layer: state handoff (start writing on Mac → continue on phone), notification mirroring, capability-token mint / revoke UI in the desktop + Android + iOS GUIs (no CLI required)
+- [ ] **v1.7** — Cross-LAN without sacrificing "no-cloud": opt-in Tailscale / WireGuard overlay integration with auto-add-manual-peer for the tailnet, optional federated rendezvous relay (community-hosted), WebRTC hole-punching via public STUN — all three are opt-in and the default stays LAN-only
+- [ ] **v2.0** — "Continuity OS" wedge: cross-device input sharing (keyboard / mouse, à la Logitech Flow), Sidecar-style window streaming, phone-as-webcam, workspace tags (walk to any desk → tap → your environment appears)
 
 ## Contributing
 
