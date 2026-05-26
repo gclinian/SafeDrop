@@ -259,6 +259,32 @@ def cmd_audit(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------- main ---
 
 
+def cmd_tailscale(args: argparse.Namespace) -> int:
+    from . import tailscale as ts
+    try:
+        peers = ts.discover_peers(
+            include_self=args.include_self,
+            online_only=not args.all,
+            tailscale_bin=args.tailscale_bin,
+        )
+    except RuntimeError as exc:
+        print(f"safedrop: {exc}", file=sys.stderr)
+        return 2
+    rows = [p.to_safedrop_peer_stub(port=args.port) for p in peers]
+    if args.json:
+        print(json.dumps(rows, indent=2))
+    else:
+        if not rows:
+            print("No tailnet peers found.")
+            return 0
+        print(f"{'name':<28} {'ip':<16} {'platform':<10} online")
+        for r in rows:
+            print(f"{r['name'][:28]:<28} {r['ip']:<16} {r['platform'][:10]:<10} {r['online']}")
+        print("\n(Add as manual peers in the SafeDrop GUI / mobile app. "
+              "The 'pubkey' field is filled in on first handshake.)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="safedrop", description="SafeDrop CLI — LAN file & clipboard sharing")
     p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
@@ -315,6 +341,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_a.add_argument("--limit", type=int, default=50)
     _json_too(p_a)
     p_a.set_defaults(func=cmd_audit)
+
+    p_ts = sub.add_parser("tailscale",
+                          help="list / add peers from a Tailscale tailnet (cross-LAN, v1.7)")
+    p_ts.add_argument("action", choices=("list",),
+                      help="`list` prints visible tailnet peers.")
+    p_ts.add_argument("--include-self", action="store_true",
+                      help="include this machine in the output.")
+    p_ts.add_argument("--all", action="store_true",
+                      help="include offline peers.")
+    p_ts.add_argument("--port", type=int, default=47891,
+                      help="default TCP port to assume for SafeDrop on each peer (default 47891).")
+    p_ts.add_argument("--tailscale-bin", default="tailscale",
+                      help="path to the `tailscale` CLI binary (default: PATH).")
+    _json_too(p_ts)
+    p_ts.set_defaults(func=cmd_tailscale)
 
     return p
 

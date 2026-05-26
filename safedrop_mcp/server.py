@@ -63,6 +63,8 @@ from safedrop.transfer import TransferState
 from .agent_bus import AgentBus
 from .agent_identity import AgentIdentity, load_or_create as load_agent_identity
 from .policy import Policy, resolve as resolve_policy
+from .token_tools import make_token_peer_tools
+from .tokens import TokenStore
 
 
 _SERVER_VERSION = "0.3.0"
@@ -420,6 +422,118 @@ def _static_tool_defs() -> list[types.Tool]:
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
+        # ---- v1.6 capability-token management ------------------------
+        types.Tool(
+            name="tokens_list",
+            description=(
+                "List capability tokens persisted on this device "
+                "(~/.safedrop/tokens.json). Tokens are redacted to last 6 chars. "
+                "Same surface as `safedrop-mcp-tokens list` and as the peer "
+                "tool `tokens_list` — the GUI on each platform should use this."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="tokens_mint",
+            description=(
+                "Mint a new capability token. Returns the full token string "
+                "ONCE — copy it immediately; it cannot be retrieved later. "
+                "Required: label. Optional: scope (list of fnmatch globs), "
+                "ttl_seconds."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "label":       {"type": "string"},
+                    "scope":       {"type": "array", "items": {"type": "string"}},
+                    "ttl_seconds": {"type": "number"},
+                },
+                "required": ["label"],
+            },
+        ),
+        types.Tool(
+            name="tokens_revoke",
+            description=(
+                "Revoke a token by its full string OR by 6-char suffix from "
+                "tokens_list. Returns {status, matched?, label?}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"token": {"type": "string"}},
+                "required": ["token"],
+            },
+        ),
+        # ---- v1.6 handoff -----------------------------------------
+        types.Tool(
+            name="handoff_save",
+            description=(
+                "Save a piece of state (text) under a key so it can be "
+                "picked up on another paired device. Useful for drafts, "
+                "URLs, in-progress commands. Overwrites prior entry."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key":       {"type": "string"},
+                    "content":   {"type": "string"},
+                    "mime_type": {"type": "string", "default": "text/plain"},
+                },
+                "required": ["key", "content"],
+            },
+        ),
+        types.Tool(
+            name="handoff_load",
+            description="Load a previously saved handoff by key.",
+            inputSchema={
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+                "required": ["key"],
+            },
+        ),
+        types.Tool(
+            name="handoff_list",
+            description="List stored handoffs (newest first) with previews.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
+            name="handoff_delete",
+            description="Delete a handoff entry by key.",
+            inputSchema={
+                "type": "object",
+                "properties": {"key": {"type": "string"}},
+                "required": ["key"],
+            },
+        ),
+        # ---- v1.6 notifications -----------------------------------
+        types.Tool(
+            name="show_notification",
+            description=(
+                "Show a notification on this device. Recipient renders it "
+                "natively (tkinter banner, iOS UNUserNotificationCenter, "
+                "Android NotificationManager). Returns once enqueued."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "body":  {"type": "string"},
+                    "level": {"type": "string",
+                              "enum": ["info", "warn", "error"], "default": "info"},
+                },
+            },
+        ),
+        types.Tool(
+            name="notifications_recent",
+            description=(
+                "Read recent notifications received on this device "
+                "(via show_notification from any paired peer). "
+                "Useful for: 'did my phone get any banners while I was AFK?'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "default": 50}},
+            },
+        ),
     ]
 
 
@@ -429,6 +543,7 @@ def _static_tool_defs() -> list[types.Tool]:
 server: Server = Server("safedrop")
 service: Optional[HeadlessSafeDrop] = None
 agent_bus: Optional[AgentBus] = None
+token_store: Optional[TokenStore] = None
 
 
 def _text(payload: Any) -> list[types.ContentBlock]:
@@ -733,6 +848,40 @@ async def handle_call_tool(name: str, arguments: dict | None) -> Sequence[types.
             return _text({"error": f"{type(exc).__name__}: {exc}"})
         return _text({"peer": peer.name, "to_agent": to_agent, **outcome})
 
+    # ---- v1.6 capability-token management ---------------------------
+    if name in ("tokens_list", "tokens_mint", "tokens_revoke"):
+        if token_store is None:
+            return _text({"error": "token store not initialised"})
+        # Dispatch through the peer-tool handlers (already constructed and
+        # vetted in token_tools.py — single source of truth).
+        from .token_tools import _list, _mint, _revoke
+        if name == "tokens_list":
+            return _text(_list(token_store, args))
+        if name == "tokens_mint":
+            return _text(_mint(token_store, args))
+        return _text(_revoke(token_store, args))
+
+    # ---- v1.6 handoff -----------------------------------------------
+    if name.startswith("handoff_"):
+        from . import handoff_tools as _ht
+        if name == "handoff_save":
+            return _text(_ht._save(args))
+        if name == "handoff_load":
+            return _text(_ht._load(args))
+        if name == "handoff_list":
+            return _text(_ht._list(args))
+        if name == "handoff_delete":
+            return _text(_ht._delete(args))
+
+    # ---- v1.6 notifications -----------------------------------------
+    if name == "show_notification":
+        from .notification_tools import _handle as _show
+        return _text(_show(args))
+    if name == "notifications_recent":
+        from .notification_tools import bus as _nbus
+        limit = int(args.get("limit", 50) or 50)
+        return _text({"notifications": _nbus.recent(limit=limit)})
+
     return _text({"error": f"unknown tool {name!r}"})
 
 
@@ -760,7 +909,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _main_async(args: argparse.Namespace) -> None:
-    global service, _policy, agent_bus
+    global service, _policy, agent_bus, token_store
     _policy = resolve_policy(
         allow_arg=args.allow,
         deny_arg=args.deny,
@@ -776,6 +925,22 @@ async def _main_async(args: argparse.Namespace) -> None:
     identity = load_agent_identity(label=service.device_name)
     agent_bus = AgentBus(identity=identity)
     agent_bus.register_peer_tools(service.tool_registry)
+
+    # ---- v1.6 cross-device token management ---------------------------
+    # Same TokenStore the HTTP transport reads from. We expose
+    # tokens_list/mint/revoke as both peer tools (callable from a phone
+    # over SafeDrop) AND as MCP tools (callable by this machine's agent).
+    token_store = TokenStore()
+    for spec in make_token_peer_tools(token_store):
+        service.tool_registry.register(spec)
+
+    # ---- v1.6 handoff -------------------------------------------------
+    from .handoff_tools import register_handoff_peer_tools
+    register_handoff_peer_tools(service.tool_registry)
+
+    # ---- v1.6 notifications ------------------------------------------
+    from .notification_tools import register_notification_peer_tool
+    register_notification_peer_tool(service.tool_registry)
 
     service.start()
     # Configure MCP bridges (Phase X.4) if requested.

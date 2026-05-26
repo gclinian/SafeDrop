@@ -55,6 +55,17 @@ Per-`peer_name` conversation isolation; slash commands handled locally
 (no LLM round-trip). The `anthropic` import is lazy so the rest of the
 package works without the `[agent]` extra installed.
 
+`safedrop/handoff.py` (v1.6) — `HandoffStore` persistent KV store at
+`~/.safedrop/handoff.json` (atomic write, 0o600 on POSIX, 1 MB cap).
+Wrapped as peer + MCP tools (`handoff_save/load/list/delete`) via
+`safedrop_mcp/handoff_tools.py`. The continuity primitive: save a
+draft on one device, load on another over CALL_TOOL.
+
+`safedrop/tailscale.py` (v1.7) — parses `tailscale status --json`
+into `TailscalePeer` rows and emits SafeDrop manual-peer stubs. Used
+by `safedrop tailscale list` CLI subcommand. Opt-in cross-LAN —
+Tailscale handles WireGuard routing, SafeDrop's Fernet stays on top.
+
 ### `safedrop_mcp/` — MCP server (stdio + HTTP)
 
 `safedrop_mcp/server.py` exposes four sources of tools in one combined
@@ -62,7 +73,7 @@ package works without the `[agent]` extra installed.
 
 | Source | Tool naming | Where it's set up |
 | --- | --- | --- |
-| Static local | `list_devices`, `send_file`, `send_text`, `wait_for_drop`, `list_remote_tools`, `call_remote_tool`, `audit_log`, `register_local_tool`, `unregister_local_tool`, `list_local_tools`, `whoami`, `list_agents`, `send_message`, `recv_messages` | `_static_tool_defs()` |
+| Static local | transfer (`list_devices`, `send_file`, `send_text`, `wait_for_drop`), explicit-remote (`list_remote_tools`, `call_remote_tool`), audit + dynamic (`audit_log`, `register_local_tool`, `unregister_local_tool`, `list_local_tools`), agent-bus (`whoami`, `list_agents`, `send_message`, `recv_messages`), tokens (`tokens_list`, `tokens_mint`, `tokens_revoke`), handoff (`handoff_save/load/list/delete`), notifications (`show_notification`, `notifications_recent`) | `_static_tool_defs()` |
 | Dynamic peer tools | `<peer_slug>__<tool>` | `_fetch_peer_tools()` polls `safedrop.tools` peers in parallel with a 20 s TTL cache |
 | MCP bridge | `bridge.<name>.<tool>` | `safedrop_mcp/bridge.py` spawns other MCP servers (from `~/.safedrop/bridges.json`) as stdio subprocesses |
 | Runtime-registered | whatever the agent names it | `register_local_tool` stores a `handler_url` and POSTs to it on each call |
@@ -87,6 +98,22 @@ on the shared `ToolRegistry`; the four MCP tools (`whoami`,
 those peer tools over the existing encrypted CALL_TOOL channel. Inbox
 is JSON Lines at `~/.safedrop/agent_bus/inbox.jsonl`.
 
+`safedrop_mcp/token_tools.py` + `safedrop_mcp/handoff_tools.py` +
+`safedrop_mcp/notification_tools.py` (v1.6) — same dual-surface pattern
+as agent_bus: each module exposes a small set of handlers, registers
+them as SafeDrop peer tools (so phones / other paired devices can
+call them via CALL_TOOL), AND `server.py` dispatches the same handlers
+for the MCP-side static tool surface. The token UI in `safedrop/gui.py`
+talks to `TokenStore` directly (same store the HTTP transport reads
+from).
+
+`safedrop_mcp/rendezvous.py` (v1.7) — `safedrop-beacon` console script.
+Tiny Starlette app: POST `/announce` registers `(agent_id, ip,
+tcp_port, pubkey, capabilities, ttl)` in an in-memory `BeaconRegistry`;
+GET `/peers` returns active entries; optional Bearer-token auth via
+`--secret`. Discovery-only — no traffic relay. The default install
+never talks to a beacon; users opt in by pointing at one.
+
 ### `android/` (Kotlin / Compose) and `ios/` (Swift / SwiftUI)
 
 Both mirror the Python module split: `crypto/` (X25519, HKDF, Fernet —
@@ -107,7 +134,7 @@ deadlocks under blocking I/O.
 python3 -m venv .venv
 .venv/bin/pip install -e '.[mcp]'
 
-# Full test suite (55 tests, takes ~45 s)
+# Full test suite (95 tests, takes ~45 s)
 .venv/bin/python -m unittest discover -s tests
 
 # Single test
@@ -132,6 +159,13 @@ python3 -m venv .venv
 
 # Run the headless LLM agent (v1.4) — pip install -e '.[agent]' first
 ANTHROPIC_API_KEY=... .venv/bin/safedrop-agent --name-suffix agent
+
+# Run the cross-LAN rendezvous beacon (v1.7) — discovery-only, no relay
+.venv/bin/safedrop-beacon --bind 127.0.0.1:47900               # open (LAN-only)
+.venv/bin/safedrop-beacon --bind 0.0.0.0:47900 --secret SECRET # auth required
+
+# List Tailscale tailnet peers (v1.7) — requires `tailscale` CLI installed
+.venv/bin/safedrop tailscale list
 ```
 
 Several tests spawn `safedrop-mcp` as a subprocess (e.g.
@@ -195,6 +229,7 @@ matter for tests:
 | `~/.safedrop/bridges.json` | other MCP servers to import as `bridge.<name>.<tool>` | `safedrop_mcp/bridge.py` |
 | `~/.safedrop/agent_id.json` | persistent agent identity (0o600 on POSIX) | `safedrop_mcp/agent_identity.py` |
 | `~/.safedrop/agent_bus/inbox.jsonl` | inbound agent-bus messages (JSON Lines) | `safedrop_mcp/agent_bus.py` |
+| `~/.safedrop/handoff.json` | state-handoff KV (0o600 on POSIX, 1 MB cap) | `safedrop/handoff.py` |
 | `~/Downloads/SafeDrop/` | inbound files | `TransferManager._choose_save_path` |
 
 Tests sandbox these by mutating `safedrop.config.DOWNLOAD_DIR` and

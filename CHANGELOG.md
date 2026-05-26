@@ -5,6 +5,82 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-26
+
+The "continuity primitives + opt-in cross-LAN" release. Closes out the
+roadmap v1.6 and v1.7 items (sans WebRTC, which stays research-grade).
+
+### Added — v1.6 continuity primitives
+
+- **Capability-token cross-device management.** Three new tools
+  (`tokens_list`, `tokens_mint`, `tokens_revoke`) wired *both* as
+  SafeDrop peer tools (registered on the local `ToolRegistry`, so any
+  paired device can call them over the encrypted CALL_TOOL channel)
+  *and* as static MCP tools (so the local agent sees them too). Mint
+  returns the full secret once; list redacts to the last 6 chars;
+  revoke accepts the full token or that 6-char suffix.
+- **Token management UI** in the Python desktop GUI
+  (`safedrop/gui.py`): new "🔑 Tokens" button in the header opens a
+  Toplevel with mint form + scope/TTL fields, redacted list with
+  expiry display, prune-expired button, and a one-time "copy this
+  now" reveal sheet when a new token is minted.
+- **State handoff** (`safedrop/handoff.py`). Tiny persistent
+  key-value store at `~/.safedrop/handoff.json` for "save the draft
+  on my laptop, pick it up on my phone" continuity. Atomic writes,
+  0o600 on POSIX, 1 MB content cap (anything bigger is a file
+  transfer). Peer + MCP tools: `handoff_save`, `handoff_load`,
+  `handoff_list`, `handoff_delete`.
+- **Notification mirroring** (`safedrop_mcp/notification_tools.py`).
+  `show_notification(title, body, level)` peer tool with an in-process
+  `NotificationBus` ring buffer + optional callback the GUI installs.
+  `notifications_recent(limit)` MCP tool reads back what's been
+  pushed. Wire shape is platform-neutral so iOS/Android can render
+  natively in follow-up releases.
+
+### Added — v1.7 opt-in cross-LAN
+
+- **Tailscale integration** (`safedrop/tailscale.py`). Parses
+  `tailscale status --json`, exposes `discover_peers()` /
+  `TailscalePeer.to_safedrop_peer_stub()`. New CLI subcommand
+  `safedrop tailscale list` prints visible tailnet peers ready to
+  drop into a SafeDrop manual-peer entry. `pubkey` field stays empty
+  until first SafeDrop handshake — Tailscale is just for routing,
+  SafeDrop's Fernet stays on top.
+- **Rendezvous beacon** (`safedrop_mcp/rendezvous.py`) +
+  `safedrop-beacon` console script. Discovery-only HTTP service:
+  POST `/announce` registers `(agent_id, ip, tcp_port, pubkey,
+  capabilities, ttl)`; GET `/peers` returns active entries;
+  `/healthz` open for load balancers; optional Bearer-token auth
+  via `--secret`. **Does not relay traffic** — just lets two SafeDrop
+  peers across NATs learn each other's public address, then they
+  fall back to the normal encrypted TCP path.
+
+### Changed
+- `pyproject.toml` -> `1.5.0`; new `safedrop-beacon` console entry
+  alongside `safedrop`, `safedrop-mcp`, `safedrop-mcp-tokens`,
+  `safedrop-agent`.
+- `safedrop_mcp/server.py` `_main_async` now instantiates
+  `TokenStore` once and registers handoff + notification peer tools
+  alongside the existing agent_bus peer tools.
+
+### Deferred (intentionally out of scope)
+- **WebRTC hole-punching via STUN/TURN** — multi-week effort, deferred
+  to a future release. Tailscale + the rendezvous beacon cover most
+  real-world cross-LAN needs without the complexity.
+- **Android Compose token UI** — to avoid build-breakage risk without
+  a proper Android test loop. The cross-device token tools are
+  callable from Android today (they appear as `<desktop_slug>__tokens_*`
+  in any MCP client); a native Compose screen is straightforward
+  follow-up work.
+- **iOS token UI** — same reasoning; the underlying peer tools work,
+  the SwiftUI screen is a follow-up.
+
+### Tests
+- 40 new tests across `test_handoff_tokens_notify.py` (23),
+  `test_tailscale.py` (8), `test_beacon.py` (9). Beacon HTTP tests
+  drive the Starlette ASGI app in-process via `httpx.ASGITransport`
+  — no real socket needed.
+
 ## [1.4.0] — 2026-05-26
 
 The "multi-agent mesh" release. SafeDrop becomes a fabric for AI agents

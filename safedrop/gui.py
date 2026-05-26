@@ -147,6 +147,8 @@ class SafeDropApp:
         ttk.Label(header, textvariable=self.status_var, foreground="#444").pack(side="right", padx=(0, 8))
         ttk.Button(header, text="🔒 Manage trust",
                    command=self._show_trust_dialog).pack(side="right", padx=(0, 6))
+        ttk.Button(header, text="🔑 Tokens",
+                   command=self._show_tokens_dialog).pack(side="right", padx=(0, 6))
 
         main = ttk.Panedwindow(self.root, orient="horizontal")
         main.pack(side="top", fill="both", expand=True, padx=10, pady=(0, 6))
@@ -685,6 +687,165 @@ class SafeDropApp:
         btns.pack(fill="x", pady=(8, 0))
         ttk.Button(btns, text="Revoke selected entry", command=revoke_selected).pack(side="left")
         ttk.Button(btns, text="Revoke entire peer", command=revoke_peer).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Refresh", command=refresh).pack(side="left", padx=(12, 0))
+        ttk.Button(btns, text="Close", command=top.destroy).pack(side="right")
+
+        refresh()
+
+    # ------------------------------------------------------------------
+    # Token management dialog (v1.6) — same surface as `safedrop-mcp-tokens`
+    # but without leaving the GUI.
+    # ------------------------------------------------------------------
+    def _show_tokens_dialog(self) -> None:
+        # Lazy import — TokenStore lives in the optional [mcp] extra.
+        try:
+            from safedrop_mcp.tokens import TokenStore
+        except ImportError:
+            messagebox.showerror(
+                "Tokens",
+                "safedrop[mcp] is not installed. Run:\n\n"
+                "  pip install -e '.[mcp]'\n\n"
+                "to enable capability tokens.",
+            )
+            return
+
+        store = TokenStore()
+
+        top = tk.Toplevel(self.root)
+        top.title("Capability tokens")
+        top.geometry("720x460")
+        top.transient(self.root)
+
+        wrap = ttk.Frame(top, padding=10)
+        wrap.pack(fill="both", expand=True)
+
+        ttk.Label(
+            wrap,
+            text=(
+                "HTTP-transport bearer tokens persisted to ~/.safedrop/tokens.json.\n"
+                "Tokens are redacted in this view — the full secret is only shown "
+                "once, right after you mint it."
+            ),
+            foreground="#555",
+            wraplength=700,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        cols = ("label", "suffix", "scope", "expires")
+        tree = ttk.Treeview(wrap, columns=cols, show="headings",
+                            selectmode="extended", height=10)
+        tree.heading("label", text="Label")
+        tree.heading("suffix", text="…suffix")
+        tree.heading("scope", text="Scope (fnmatch globs)")
+        tree.heading("expires", text="Expires")
+        tree.column("label", width=140, anchor="w")
+        tree.column("suffix", width=80, anchor="w")
+        tree.column("scope", width=300, anchor="w")
+        tree.column("expires", width=140, anchor="w")
+        tree.pack(fill="both", expand=True)
+
+        def refresh() -> None:
+            for iid in tree.get_children():
+                tree.delete(iid)
+            rows = store.snapshot()
+            if not rows:
+                tree.insert("", "end", values=("(no tokens)", "", "", ""))
+                return
+            for t in sorted(rows, key=lambda r: r.created_at, reverse=True):
+                scope = ", ".join(t.scope) or "(allow-all)"
+                exp = "—" if t.expires_at is None else time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(t.expires_at)
+                )
+                if t.is_expired():
+                    exp += " (expired)"
+                tree.insert(
+                    "", "end",
+                    iid=t.token,
+                    values=(t.label, t.token[-6:], scope, exp),
+                )
+
+        # ---- mint form ----
+        mint_frame = ttk.Labelframe(wrap, text="Mint new token", padding=8)
+        mint_frame.pack(fill="x", pady=(10, 0))
+
+        row1 = ttk.Frame(mint_frame)
+        row1.pack(fill="x")
+        ttk.Label(row1, text="Label:", width=10).pack(side="left")
+        label_var = tk.StringVar()
+        ttk.Entry(row1, textvariable=label_var, width=24).pack(side="left", padx=(0, 12))
+
+        ttk.Label(row1, text="TTL (s):").pack(side="left")
+        ttl_var = tk.StringVar(value="86400")
+        ttk.Entry(row1, textvariable=ttl_var, width=10).pack(side="left", padx=(4, 0))
+
+        row2 = ttk.Frame(mint_frame)
+        row2.pack(fill="x", pady=(6, 0))
+        ttk.Label(row2, text="Scope:", width=10).pack(side="left")
+        scope_var = tk.StringVar(value="")
+        ttk.Entry(row2, textvariable=scope_var).pack(side="left", fill="x", expand=True)
+        ttk.Label(row2, text="(comma-separated, blank = allow-all)",
+                  foreground="#888").pack(side="left", padx=(6, 0))
+
+        def do_mint() -> None:
+            label = label_var.get().strip()
+            if not label:
+                messagebox.showwarning("Mint", "Label is required.")
+                return
+            scope_csv = scope_var.get().strip()
+            scope = tuple(s.strip() for s in scope_csv.split(",") if s.strip()) if scope_csv else ()
+            try:
+                ttl_str = ttl_var.get().strip()
+                ttl = float(ttl_str) if ttl_str else None
+            except ValueError:
+                messagebox.showerror("Mint", "TTL must be a number of seconds.")
+                return
+            tok = store.mint(label=label, scope=scope, ttl_seconds=ttl)
+            # One-time secret display.
+            secret_win = tk.Toplevel(top)
+            secret_win.title("Token minted")
+            secret_win.geometry("640x220")
+            secret_win.transient(top)
+            ttk.Label(secret_win, padding=10, font=("Helvetica", 11, "bold"),
+                      text="Copy this secret NOW — it will not be shown again.",
+                      foreground="#a00").pack(anchor="w")
+            entry = ttk.Entry(secret_win, font=("Menlo", 11))
+            entry.insert(0, tok.token)
+            entry.config(state="readonly")
+            entry.pack(fill="x", padx=10, pady=(0, 10))
+
+            def copy_to_clipboard() -> None:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(tok.token)
+                copy_btn.config(text="Copied!")
+
+            btn_row = ttk.Frame(secret_win)
+            btn_row.pack(fill="x", padx=10, pady=(0, 10))
+            copy_btn = ttk.Button(btn_row, text="Copy to clipboard", command=copy_to_clipboard)
+            copy_btn.pack(side="left")
+            ttk.Button(btn_row, text="Close", command=secret_win.destroy).pack(side="right")
+
+            label_var.set(""); scope_var.set(""); ttl_var.set("86400")
+            refresh()
+
+        ttk.Button(mint_frame, text="Mint", command=do_mint).pack(anchor="e", pady=(6, 0))
+
+        # ---- action buttons ----
+        btns = ttk.Frame(wrap)
+        btns.pack(fill="x", pady=(10, 0))
+
+        def revoke_selected() -> None:
+            sel = tree.selection()
+            for iid in sel:
+                store.revoke(iid)
+            refresh()
+
+        def prune_expired() -> None:
+            n = store.prune_expired()
+            messagebox.showinfo("Prune", f"Pruned {n} expired token(s).")
+            refresh()
+
+        ttk.Button(btns, text="Revoke selected", command=revoke_selected).pack(side="left")
+        ttk.Button(btns, text="Prune expired", command=prune_expired).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Refresh", command=refresh).pack(side="left", padx=(12, 0))
         ttk.Button(btns, text="Close", command=top.destroy).pack(side="right")
 
