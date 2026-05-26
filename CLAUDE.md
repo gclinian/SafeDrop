@@ -134,7 +134,7 @@ deadlocks under blocking I/O.
 python3 -m venv .venv
 .venv/bin/pip install -e '.[mcp]'
 
-# Full test suite (95 tests, takes ~45 s)
+# Full test suite (102 tests, takes ~15 s)
 .venv/bin/python -m unittest discover -s tests
 
 # Single test

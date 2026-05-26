@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-95%2F95_passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-102%2F102_passing-brightgreen.svg)](#tests)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-lightgrey.svg)](#platforms)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20HTTP-orange.svg)](MCP_AGENT_GUIDE.md)
 
@@ -240,7 +240,7 @@ safedrop_mcp/     MCP server: stdio + HTTP, policy, tokens, bridge,
 android/          Native Kotlin / Compose client (xcodegen-equiv via
                   gradle wrapper, checked in)
 ios/              Native Swift / SwiftUI client (xcodegen-managed)
-tests/            95 Python tests covering everything above
+tests/            102 Python tests covering everything above
 SPEC.md           Protocol specification
 MCP_AGENT_GUIDE.md       Agent integration guide
 REAL_DEVICE_TESTING.md   Manual QA checklist
@@ -275,7 +275,7 @@ two HELLO frames are readable.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
-# Ran 95 tests in ~45 s — OK
+# Ran 102 tests in ~15 s — OK
 ```
 
 Coverage at a glance:

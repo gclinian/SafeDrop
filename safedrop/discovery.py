@@ -61,6 +61,42 @@ def _get_outbound_ip() -> str:
     return ip
 
 
+def _broadcast_targets(local_ip: str) -> tuple[str, ...]:
+    """Best-effort list of IPv4 destinations to send each HELLO datagram to.
+
+    Strategy (each target is tried; failures are silently swallowed by
+    :meth:`DiscoveryService._broadcast`):
+
+    1. ``127.0.0.1`` — loopback. Catches two SafeDrop instances on the
+       same machine (common during development and in the test suite).
+    2. **Subnet broadcast**, computed by assuming /24 on the outbound
+       interface (e.g. ``192.168.0.255`` for ``192.168.0.101``). This is
+       what the OS computes natively when SO_BROADCAST is set; we
+       compute it explicitly so it still works when ``255.255.255.255``
+       is unreachable — typical on machines running a VPN whose default
+       route swallows global broadcasts.
+    3. ``255.255.255.255`` — global broadcast. Works on flat LANs with
+       no VPN; harmless when it doesn't.
+    """
+    targets: list[str] = ["127.0.0.1"]
+    if local_ip and local_ip != "127.0.0.1":
+        parts = local_ip.split(".")
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            # /24 assumption is the right call for the vast majority of
+            # home + office LANs. Networks that use /16 still typically
+            # have routers that accept the /24 broadcast.
+            targets.append(f"{parts[0]}.{parts[1]}.{parts[2]}.255")
+    targets.append("255.255.255.255")
+    # Preserve order, drop duplicates.
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in targets:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return tuple(out)
+
+
 class DiscoveryService:
     """Background UDP broadcaster + listener."""
 
@@ -148,11 +184,17 @@ class DiscoveryService:
     def _broadcast(self, payload: bytes) -> None:
         if self._send_sock is None:
             return
-        for target in ("255.255.255.255",):
+        # Recompute targets each tick so we adapt to a network change
+        # (e.g. plugging into a different LAN). The function is cheap.
+        for target in _broadcast_targets(self.local_ip):
             try:
                 self._send_sock.sendto(payload, (target, DISCOVERY_PORT))
             except OSError:
-                pass
+                # Any single target can fail on a particular network —
+                # the others still get a chance. (E.g. 255.255.255.255
+                # raises "No route to host" when a VPN owns the default
+                # route, but the subnet broadcast still works.)
+                continue
 
     def _broadcast_loop(self) -> None:
         payload = self._hello_payload()

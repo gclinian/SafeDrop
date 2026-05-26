@@ -75,7 +75,7 @@ safedrop/         Python core: crypto, discovery, transfer, CLI, tkinter GUI
 safedrop_mcp/     Python MCP server: stdio + HTTP, policy, tokens, bridge
 android/          Native Kotlin / Jetpack Compose client
 ios/              Native Swift / SwiftUI client (xcodegen-managed)
-tests/            95 Python tests (unit + e2e + cross-language interop)
+tests/            102 Python tests (unit + e2e + cross-language interop)
 SPEC.md           Protocol specification
 MCP_AGENT_GUIDE.md      Agent integration walkthrough
 REAL_DEVICE_TESTING.md  Manual QA checklist for real-hardware deploys
