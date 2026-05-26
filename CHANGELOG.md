@@ -5,6 +5,40 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-05-26
+
+Patch — make the desktop install path **actually one line**. No
+protocol changes, no new dependencies.
+
+### Added
+- **`scripts/install.sh`** — one-key installer for macOS + Linux.
+  Verifies Python 3.10+, asserts tkinter is importable (with a clear,
+  platform-specific fix on failure), creates a hermetic venv at
+  `~/.local/share/safedrop/venv`, installs `safedrop[mcp]` from PyPI
+  (or `--from-release` against the latest GitHub Release wheel), and
+  drops `safedrop-gui` / `safedrop` / `safedrop-mcp` /
+  `safedrop-mcp-tokens` / `safedrop-agent` / `safedrop-beacon`
+  launchers into `~/.local/bin`. Idempotent.
+- **`scripts/install.ps1`** — PowerShell counterpart for Windows. Venv
+  lives at `%LOCALAPPDATA%\SafeDrop\venv`; `.cmd` launchers under
+  `%LOCALAPPDATA%\SafeDrop\bin`. Same flow, same error messages.
+
+### Changed
+- README "Quick start" now leads with the one-line install:
+  ```
+  curl -fsSL https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/install.sh | bash
+  ```
+  (and the `iwr | iex` Windows equivalent). The previous
+  `git clone` + venv + `pip install -e` flow is preserved under a new
+  *Desktop — manual install* subsection for the security-conscious.
+- `docs/landing.html` install snippet updated to match.
+
+### Tests
+- Smoke-verified `scripts/install.sh --from-release` against the
+  published `v1.6.0` wheel: pulls the .whl from GitHub Releases,
+  installs into a fresh venv, launchers fire correctly,
+  `safedrop ls` runs without errors.
+
 ## [1.6.0] — 2026-05-26
 
 The "actually finish v1.6 + introduce the project" release. Closes

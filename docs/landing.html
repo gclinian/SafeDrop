@@ -275,13 +275,15 @@
     <p class="lead">
       Desktop / CLI / MCP server install in one line. Android &amp; iOS clients ship as APK / IPA on GitHub Releases.
     </p>
-<pre><code>$ pip install -e <span style="color:var(--accent-warm)">'safedrop[mcp]'</span>           <span style="color:var(--text-dim)"># desktop, CLI, MCP, tokens</span>
+<pre><code><span style="color:var(--text-dim)"># macOS / Linux — one-line installer (creates a hermetic venv, drops launchers in ~/.local/bin)</span>
+$ curl -fsSL <span style="color:var(--accent-warm)">https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/install.sh</span> | bash
 
-<span style="color:var(--text-dim)"># desktop GUI (needs tkinter)</span>
-$ python run.py
+<span style="color:var(--text-dim)"># Windows (PowerShell)</span>
+PS&gt; iwr -useb <span style="color:var(--accent-warm)">https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/install.ps1</span> | iex
 
-<span style="color:var(--text-dim)"># headless CLI</span>
-$ safedrop ls
+<span style="color:var(--text-dim)"># now on every platform:</span>
+$ safedrop-gui              <span style="color:var(--text-dim)"># desktop GUI (needs tkinter)</span>
+$ safedrop ls               <span style="color:var(--text-dim)"># headless CLI</span>
 $ safedrop send-text macbook <span style="color:var(--accent-warm)">"hello from the terminal"</span>
 
 <span style="color:var(--text-dim)"># expose as MCP tools to Claude Code</span>
@@ -293,6 +295,11 @@ $ ANTHROPIC_API_KEY=... safedrop-agent --name-suffix agent
 <span style="color:var(--text-dim)"># cross-LAN discovery without a relay (v1.7)</span>
 $ safedrop tailscale list
 $ safedrop-beacon --bind 0.0.0.0:47900 --secret <span style="color:var(--accent-warm)">$(openssl rand -hex 16)</span></code></pre>
+    <p style="color: var(--text-dim); font-size: 14px; margin-top: 12px;">
+      Prefer not piping a script into your shell? See the
+      <a href="https://github.com/gclinian/SafeDrop#desktop--manual-install">manual install</a>
+      — same result in three steps.
+    </p>
   </div>
 </section>
 

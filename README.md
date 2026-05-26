@@ -52,7 +52,45 @@ open-source toolkit.</sub>
 
 ## Quick start
 
-### Desktop (Python)
+### Desktop — the one-line install (Recommended)
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/install.ps1 | iex
+```
+
+The installer verifies Python 3.10+ and tkinter, creates a hermetic
+venv at `~/.local/share/safedrop/venv` (macOS/Linux) or
+`%LOCALAPPDATA%\SafeDrop\venv` (Windows), installs `safedrop[mcp]`
+from PyPI, and drops `safedrop-gui` / `safedrop` / `safedrop-mcp` /
+`safedrop-agent` / `safedrop-beacon` launchers in `~/.local/bin`
+(or `%LOCALAPPDATA%\SafeDrop\bin`). No global pollution; no sudo.
+
+After install, run on two machines on the same Wi-Fi:
+
+```bash
+safedrop-gui
+```
+
+Both peers appear in each other's *Nearby devices* list within ~10 s.
+Pick one, choose a file or paste some text, click **Send**. The other
+side gets an Allow/Deny dialog with the pair code; on Accept, the
+transfer begins.
+
+> Want to install from the latest GitHub Release instead of PyPI?
+> Pass `--from-release` (bash) or `-FromRelease` (PowerShell).
+> Want a manual install? See [Desktop — manual install](#desktop--manual-install).
+
+### Desktop — manual install
+
+If you'd rather not pipe a script into your shell, the long-form:
 
 ```bash
 git clone https://github.com/gclinian/SafeDrop.git
@@ -81,12 +119,6 @@ pip install -e .[mcp]
 safedrop-mcp --help        # CLI + MCP server (any Python 3.10+)
 python run.py              # Desktop GUI (tkinter required, see notes)
 ```
-
-Run `python run.py` on two machines on the same Wi-Fi. Both peers
-appear in each other's *Nearby devices* list within ~10 s. Pick one,
-choose a file or paste some text, click **Send**. The other side gets
-an Allow/Deny dialog with the pair code; on Accept, the transfer
-begins.
 
 > **macOS tkinter note.** Homebrew's `python3` ships without Tk — if
 > `python3 -c "import tkinter"` fails, install
