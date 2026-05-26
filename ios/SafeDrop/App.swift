@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 @main
 struct SafeDropApp: App {
@@ -22,6 +23,7 @@ struct HomeView: View {
     @State private var text: String = ""
     @State private var contentType: String = "text"
     @State private var showAddPeer = false
+    @State private var showFilePicker = false
     @State private var statusMessage: String?
 
     var allPeers: [Peer] {
@@ -49,6 +51,20 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showAddPeer) {
                 AddManualPeerSheet()
+            }
+            .fileImporter(
+                isPresented: $showFilePicker,
+                allowedContentTypes: [.data, .item, .content],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFilePicked(result)
+            }
+            .fullScreenCover(item: Binding(
+                get: { service.photoBroker.pending },
+                set: { _ in /* dismissal is owned by CameraView */ }
+            )) { req in
+                CameraView(request: req)
+                    .ignoresSafeArea()
             }
             .overlay { receivedClipboardBanner }
             .overlay { toolPromptOverlay }
@@ -110,6 +126,15 @@ struct HomeView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(selectedPeer == nil || text.isEmpty)
             }
+            HStack {
+                Button {
+                    showFilePicker = true
+                } label: {
+                    Label("Send file…", systemImage: "doc.badge.arrow.up")
+                }
+                .disabled(selectedPeer == nil)
+                Spacer()
+            }
             if let m = statusMessage {
                 Text(m).font(.caption).foregroundStyle(.secondary)
             }
@@ -166,6 +191,34 @@ struct HomeView: View {
                 statusMessage = "→ \(r["status"] ?? "?")  pair=\(r["pair_code"] ?? "?")"
             } catch {
                 statusMessage = "error: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func handleFilePicked(_ result: Result<[URL], Error>) {
+        guard let peer = selectedPeer else {
+            statusMessage = "Pick a device first."
+            return
+        }
+        switch result {
+        case .failure(let err):
+            statusMessage = "File picker error: \(err.localizedDescription)"
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            statusMessage = "Sending \(url.lastPathComponent)…"
+            // UIDocumentPicker returns security-scoped URLs; ensure we
+            // hold the scope for the lifetime of the upload.
+            let scoped = url.startAccessingSecurityScopedResource()
+            Task {
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let r = try await service.transfer.sendFile(peer: peer, fileURL: url)
+                    let status = (r["status"] as? String) ?? "?"
+                    let bytes = (r["bytes"] as? Int64).map { "\($0) bytes" } ?? ""
+                    statusMessage = "→ \(status) \(bytes)  pair=\(r["pair_code"] ?? "?")"
+                } catch {
+                    statusMessage = "error: \(error.localizedDescription)"
+                }
             }
         }
     }

@@ -1,0 +1,42 @@
+# systemd user service for SafeDrop's headless LLM bot.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/safedrop-agent.service ~/.config/systemd/user/
+#   # Edit the file: set Environment=ANTHROPIC_API_KEY=... and the ExecStart path
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now safedrop-agent
+#
+# Status / logs:
+#   systemctl --user status safedrop-agent
+#   journalctl --user -fu safedrop-agent
+#
+# Uninstall:
+#   systemctl --user disable --now safedrop-agent
+#   rm ~/.config/systemd/user/safedrop-agent.service
+#   systemctl --user daemon-reload
+#
+# Headless / SSH note:
+#   `systemctl --user` services only run when the user is logged in.
+#   For always-on, enable lingering:  sudo loginctl enable-linger $USER
+
+[Unit]
+Description=SafeDrop headless LLM agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Edit this path to point at your safedrop-agent install.
+ExecStart=/usr/local/bin/safedrop-agent --name-suffix agent
+Environment=ANTHROPIC_API_KEY=REPLACE_WITH_YOUR_KEY
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing (mild — agent needs LAN networking and home directory access).
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

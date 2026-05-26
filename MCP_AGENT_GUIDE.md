@@ -37,7 +37,8 @@ that get spliced in at every ``tools/list`` request:
 | `wait_for_drop` | ✓ | block until someone drops something at us |
 | `list_remote_tools` / `call_remote_tool` | ✓ | explicit access to remote tools |
 | `audit_log` | ✓ | local audit log |
-| `register_local_tool` / `unregister_local_tool` / `list_local_tools` | **NEW** | dynamic tool registration via HTTP callback |
+| `register_local_tool` / `unregister_local_tool` / `list_local_tools` | ✓ | dynamic tool registration via HTTP callback |
+| `whoami` / `list_agents` / `send_message` / `recv_messages` | **NEW (v1.5)** | multi-agent mesh — talk to other agents on the LAN by stable `agent_id` |
 
 | Dynamic tool name | Source | Example |
 | --- | --- | --- |
@@ -279,7 +280,80 @@ All authenticated, all scoped, all logged in
 needs to round-trip (and your token can be revoked instantly with
 `safedrop-mcp-tokens revoke`).
 
-## 8. CLI quick reference
+## 8. Multi-agent mesh — agents talking to agents (v1.5)
+
+Once two machines each run `safedrop-mcp`, they each have a stable
+`agent_id` (persisted in `~/.safedrop/agent_id.json` — survives MCP
+restarts), and four new MCP tools on top of the SafeDrop fabric:
+
+| Tool | Use it for |
+| --- | --- |
+| `whoami` | get this agent's own `agent_id` + label |
+| `list_agents` | discover every agent on the LAN, with `agent_id`, `peer_slug`, host, IP |
+| `send_message` | deliver text to a target `agent_id` (or peer slug); travels over the encrypted CALL_TOOL channel |
+| `recv_messages` | drain this agent's inbox at `~/.safedrop/agent_bus/inbox.jsonl` |
+
+So agent A (running through Claude Code on a Mac) can say to agent B
+(`safedrop-agent` on a Linux box):
+
+```text
+A> list_agents()
+[{"agent_id":"agent-7c20b8da4a1f","label":"linux-box (agent)", ...}]
+
+A> send_message(to_agent="agent-7c20b8da4a1f", content="hey, what's CPU load?")
+{"peer":"linux-box (agent)", "to_agent":"agent-7c20b8da4a1f",
+ "result":{"status":"delivered","message_id":"..."}}
+
+# (a few seconds later, B has replied via SafeDrop)
+A> recv_messages(since_ts=0)
+{"agent_id":"agent-mac01a3", "messages":[
+   {"ts":..., "from_agent_id":"agent-7c20b8da4a1f",
+    "from_label":"linux-box (agent)",
+    "content":"load avg 0.42 0.31 0.27"}]}
+```
+
+This composes with `safedrop-agent` — if B is running an Anthropic-SDK
+bot, the message routes straight to its conversation loop and B replies
+autonomously back through its own `send_message`. That gives you a real
+**agent mesh**: each node is independent, has its own model + tools, but
+they coordinate over LAN with no cloud.
+
+---
+
+## 9. Headless LLM bot — `safedrop-agent` (v1.4)
+
+`safedrop-agent` is the desktop equivalent of "phone Siri but powered
+by Claude and reachable on your LAN". It's a separate console script
+from `safedrop-mcp`: instead of exposing MCP tools to a host agent, it
+**listens for inbound text via SafeDrop**, runs an Anthropic loop, and
+replies back.
+
+```bash
+.venv/bin/pip install 'safedrop[agent]'      # adds anthropic dep
+export ANTHROPIC_API_KEY=...
+.venv/bin/safedrop-agent --name-suffix agent
+```
+
+Now from any other SafeDrop device:
+
+* iPhone → tap your desktop "agent" peer → "Send clipboard" with
+  the text "remind me to take out trash" → reply comes back in seconds.
+* `safedrop send-text "macbook agent" "what's the weather in Taipei?"`
+* Another `safedrop-mcp` agent calls `send_message(to_agent=...)` to
+  the agent's mesh id.
+
+Slash commands work inline — type `/reset` to clear conversation,
+`/tools` to list LAN peer tools, `/model claude-opus-4-7` to switch
+model for *this* sender only.
+
+Persistent setup: `scripts/com.safedrop.agent.plist` (macOS launchd)
+and `scripts/safedrop-agent.service` (Linux systemd) ship as templates.
+Edit the API-key line, copy into place, `launchctl load` or
+`systemctl --user enable --now`.
+
+---
+
+## 10. CLI quick reference
 
 | Command | Purpose |
 | --- | --- |
@@ -290,6 +364,7 @@ needs to round-trip (and your token can be revoked instantly with
 | `safedrop-mcp --bridges PATH --no-bridges` | bridge config / off-switch |
 | `safedrop-mcp-tokens mint --label … --scope … [--ttl …]` | mint capability token |
 | `safedrop-mcp-tokens list / revoke / prune` | manage tokens |
+| `safedrop-agent --name-suffix … --model …` | headless Anthropic chat bot reachable via SafeDrop |
 | `safedrop ls / send-file / send-text / call / tools / wait` | CLI for bash-tool agents |
 
 See [README.md §8](README.md) for the basic stdio setup, [SPEC.md §15–16](SPEC.md) for protocol details, and `tests/test_*.py` for executable examples of every flow above.

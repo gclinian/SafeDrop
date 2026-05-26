@@ -48,6 +48,13 @@ first; only `"ask"` falls through to the `on_tool_call` callback.
 **Headless instances default to allow-all** because their
 `on_tool_call` is `None`.
 
+`safedrop/agent.py` (v1.4) — `safedrop-agent` console script. A
+headless SafeDrop peer whose `on_clipboard` callback feeds inbound
+text to Anthropic's Messages API and replies via `send_clipboard`.
+Per-`peer_name` conversation isolation; slash commands handled locally
+(no LLM round-trip). The `anthropic` import is lazy so the rest of the
+package works without the `[agent]` extra installed.
+
 ### `safedrop_mcp/` — MCP server (stdio + HTTP)
 
 `safedrop_mcp/server.py` exposes four sources of tools in one combined
@@ -55,7 +62,7 @@ first; only `"ask"` falls through to the `on_tool_call` callback.
 
 | Source | Tool naming | Where it's set up |
 | --- | --- | --- |
-| Static local | `list_devices`, `send_file`, `send_text`, `wait_for_drop`, `list_remote_tools`, `call_remote_tool`, `audit_log`, `register_local_tool`, `unregister_local_tool`, `list_local_tools` | `_static_tool_defs()` |
+| Static local | `list_devices`, `send_file`, `send_text`, `wait_for_drop`, `list_remote_tools`, `call_remote_tool`, `audit_log`, `register_local_tool`, `unregister_local_tool`, `list_local_tools`, `whoami`, `list_agents`, `send_message`, `recv_messages` | `_static_tool_defs()` |
 | Dynamic peer tools | `<peer_slug>__<tool>` | `_fetch_peer_tools()` polls `safedrop.tools` peers in parallel with a 20 s TTL cache |
 | MCP bridge | `bridge.<name>.<tool>` | `safedrop_mcp/bridge.py` spawns other MCP servers (from `~/.safedrop/bridges.json`) as stdio subprocesses |
 | Runtime-registered | whatever the agent names it | `register_local_tool` stores a `handler_url` and POSTs to it on each call |
@@ -70,6 +77,15 @@ Anthropic's `StreamableHTTPSessionManager` behind a Starlette
 `BearerAuthMiddleware`. The middleware validates the token against
 `TokenStore` and stashes the matched token in a `ContextVar` so
 `_active_policy()` sees the right scope per request.
+
+`safedrop_mcp/agent_identity.py` + `safedrop_mcp/agent_bus.py` (v1.5)
+— the multi-agent mesh. `AgentIdentity` reads/writes
+`~/.safedrop/agent_id.json` and survives MCP restarts. `AgentBus`
+registers two SafeDrop peer tools (`agent_bus_whoami`, `agent_bus_recv`)
+on the shared `ToolRegistry`; the four MCP tools (`whoami`,
+`list_agents`, `send_message`, `recv_messages`) in `server.py` use
+those peer tools over the existing encrypted CALL_TOOL channel. Inbox
+is JSON Lines at `~/.safedrop/agent_bus/inbox.jsonl`.
 
 ### `android/` (Kotlin / Compose) and `ios/` (Swift / SwiftUI)
 
@@ -91,7 +107,7 @@ deadlocks under blocking I/O.
 python3 -m venv .venv
 .venv/bin/pip install -e '.[mcp]'
 
-# Full test suite (38 tests, takes ~14 s)
+# Full test suite (55 tests, takes ~45 s)
 .venv/bin/python -m unittest discover -s tests
 
 # Single test
@@ -113,6 +129,9 @@ python3 -m venv .venv
 # HTTP transport (needs a minted token to be reachable)
 .venv/bin/safedrop-mcp-tokens mint --label cloud --scope 'list_devices' --ttl 86400
 .venv/bin/safedrop-mcp --http 127.0.0.1:47899
+
+# Run the headless LLM agent (v1.4) — pip install -e '.[agent]' first
+ANTHROPIC_API_KEY=... .venv/bin/safedrop-agent --name-suffix agent
 ```
 
 Several tests spawn `safedrop-mcp` as a subprocess (e.g.
@@ -174,6 +193,8 @@ matter for tests:
 | `~/.safedrop/tokens.json` | HTTP transport capability tokens (0o600 on POSIX) | `safedrop-mcp-tokens` |
 | `~/.safedrop/mcp-profiles/<name>.json` | per-agent policy presets | `safedrop-mcp --profile` |
 | `~/.safedrop/bridges.json` | other MCP servers to import as `bridge.<name>.<tool>` | `safedrop_mcp/bridge.py` |
+| `~/.safedrop/agent_id.json` | persistent agent identity (0o600 on POSIX) | `safedrop_mcp/agent_identity.py` |
+| `~/.safedrop/agent_bus/inbox.jsonl` | inbound agent-bus messages (JSON Lines) | `safedrop_mcp/agent_bus.py` |
 | `~/Downloads/SafeDrop/` | inbound files | `TransferManager._choose_save_path` |
 
 Tests sandbox these by mutating `safedrop.config.DOWNLOAD_DIR` and

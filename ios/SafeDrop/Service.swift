@@ -16,18 +16,22 @@ final class SafeDropService: ObservableObject {
     let toolRegistry: ToolRegistry
     let trustStore: TrustStore
     let transfer: TransferManager
+    let photoBroker: PhotoBroker
     private(set) var discovery: Discovery?
 
     @Published var peers: [Peer] = []
     @Published var manualPeers: [Peer] = []
     private var transferSink: AnyCancellable?
+    private var photoBrokerSink: AnyCancellable?
 
     init() {
         self.identity = Identity()
         self.deviceId = UUID().uuidString
         let dev = UIDevice.current
         self.deviceName = "\(dev.name) (iOS \(dev.systemVersion))"
-        self.toolRegistry = buildDefaultRegistry()
+        let broker = PhotoBroker()
+        self.photoBroker = broker
+        self.toolRegistry = buildDefaultRegistry(photoBroker: broker)
         self.trustStore = TrustStore()
         self.transfer = TransferManager(
             identity: identity,
@@ -45,6 +49,11 @@ final class SafeDropService: ObservableObject {
         // `service` re-render when e.g. `service.transfer.toolPrompts`
         // or `service.transfer.audit` change.
         transferSink = transfer.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.objectWillChange.send() }
+        }
+        // Same trick for the camera broker — when take_photo enqueues a
+        // request, HomeView's fullScreenCover should rebuild.
+        photoBrokerSink = photoBroker.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.objectWillChange.send() }
         }
         // Build discovery now that TransferManager has bound a real port.

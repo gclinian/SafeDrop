@@ -35,7 +35,7 @@ final class ToolRegistry {
 
 // MARK: - Default tools
 
-func buildDefaultRegistry() -> ToolRegistry {
+func buildDefaultRegistry(photoBroker: PhotoBroker? = nil) -> ToolRegistry {
     let reg = ToolRegistry()
 
     reg.register(ToolSpec(
@@ -85,6 +85,43 @@ func buildDefaultRegistry() -> ToolRegistry {
             return ["status": "ok", "wrote_chars": content.count]
         }
     ))
+
+    // ---- take_photo (v1.5 phase 2) ----
+    if let broker = photoBroker {
+        reg.register(ToolSpec(
+            name: "take_photo",
+            description:
+                "Open the iOS camera so the user can take a photo to send back. " +
+                "Blocks until the user shutters (returns the JPEG) or cancels. " +
+                "Returns {mime_type, size_bytes, data_b64}.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "timeout_seconds": ["type": "integer", "default": 120],
+                ],
+            ],
+            handler: { args in
+                let timeout = TimeInterval((args["timeout_seconds"] as? Int) ?? 120)
+                // The trust dialog has already gated this call; we know
+                // the user opted in. Now wait for them to actually shoot.
+                let (data, err) = broker.capture(
+                    peerName: (args["__peer_name"] as? String) ?? "remote",
+                    pairCode: (args["__pair_code"] as? String) ?? "",
+                    timeout: timeout
+                )
+                if let d = data {
+                    return [
+                        "mime_type": "image/jpeg",
+                        "size_bytes": d.count,
+                        "data_b64": d.base64EncodedString(),
+                    ]
+                }
+                let msg = err ?? "no image"
+                throw NSError(domain: "SafeDrop", code: 20,
+                              userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+        ))
+    }
 
     return reg
 }

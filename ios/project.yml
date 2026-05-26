@@ -44,6 +44,17 @@ targets:
         NSBonjourServices:
           - _safedrop._tcp
           - _safedrop._udp
+        # v1.5: take_photo opens the camera; the user is already gated
+        # behind the SafeDrop Allow/Deny dialog, so we only need a
+        # usage string for iOS itself.
+        NSCameraUsageDescription: >
+          SafeDrop opens the camera when another paired device (e.g.
+          your laptop's AI agent) calls the take_photo tool. You will
+          see an Allow / Deny dialog before the camera is offered, and
+          you choose whether to actually take a picture.
+        NSPhotoLibraryUsageDescription: >
+          SafeDrop only accesses your photo library if you choose to
+          send a file that lives there.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.safedrop.ios

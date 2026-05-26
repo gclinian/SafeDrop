@@ -360,6 +360,76 @@ final class TransferManager: ObservableObject {
         }
     }
 
+    /// Send a local file to ``peer``. Reads chunks of 64 KiB and frames them
+    /// over the encrypted CALL_TOOL channel exactly like the Python /
+    /// Android sides. Returns ``{status, pair_code, bytes}``.
+    ///
+    /// The caller is responsible for calling
+    /// ``fileURL.startAccessingSecurityScopedResource()`` before this is
+    /// invoked from a UIDocumentPicker context, and stopping after.
+    func sendFile(peer: Peer, fileURL: URL) async throws -> [String: Any] {
+        // Snapshot file metadata on the caller's side before we hop onto
+        // ioQueue — startAccessingSecurityScopedResource is tied to the
+        // calling task in some contexts.
+        let path = fileURL.path
+        let attrs = try FileManager.default.attributesOfItem(atPath: path)
+        let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        let fileName = fileURL.lastPathComponent
+
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: Any], Error>) in
+            ioQueue.async { [weak self] in
+                guard let self else { cont.resume(throwing: NSError(domain: "SafeDrop", code: 99)); return }
+                do {
+                    let (fd, session) = try self.openSession(peer: peer)
+                    defer { close(fd) }
+                    let transferId = UUID().uuidString
+                    try FrameProtocol.sendJSON(fd, [
+                        "type": "REQUEST", "transfer_id": transferId,
+                        "kind": "file",
+                        "name": fileName,
+                        "size": size,
+                    ], encrypt: { try session.encrypt($0) })
+
+                    let decision = try FrameProtocol.recvJSON(fd, decrypt: { try session.decrypt($0) })
+                    guard (decision["type"] as? String) == "ACCEPT" else {
+                        cont.resume(returning: [
+                            "status": "rejected", "pair_code": session.pairCode,
+                        ])
+                        return
+                    }
+
+                    let fh = try FileHandle(forReadingFrom: fileURL)
+                    defer { try? fh.close() }
+                    let chunkSize = 65536
+                    var seq = 0
+                    var bytesSent: Int64 = 0
+                    while true {
+                        let chunk: Data = (try fh.read(upToCount: chunkSize)) ?? Data()
+                        // "final" iff we got a short read OR we just wrote
+                        // the last whole block — match the Python convention
+                        // where final = len(chunk) < CHUNK_SIZE (including 0).
+                        let isFinal = chunk.count < chunkSize
+                        try FrameProtocol.sendJSON(fd, [
+                            "type": "CHUNK", "transfer_id": transferId,
+                            "seq": seq,
+                            "data_b64": chunk.base64EncodedString(),
+                            "final": isFinal,
+                        ], encrypt: { try session.encrypt($0) })
+                        bytesSent += Int64(chunk.count)
+                        seq += 1
+                        if isFinal { break }
+                    }
+
+                    cont.resume(returning: [
+                        "status": "done",
+                        "pair_code": session.pairCode,
+                        "bytes": bytesSent,
+                    ])
+                } catch { cont.resume(throwing: error) }
+            }
+        }
+    }
+
     func listRemoteTools(peer: Peer) async throws -> [[String: Any]] {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[[String: Any]], Error>) in
             ioQueue.async { [weak self] in

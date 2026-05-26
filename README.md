@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-38%2F38_passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-55%2F55_passing-brightgreen.svg)](#tests)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-lightgrey.svg)](#platforms)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20HTTP-orange.svg)](MCP_AGENT_GUIDE.md)
 
@@ -240,7 +240,7 @@ safedrop_mcp/     MCP server: stdio + HTTP, policy, tokens, bridge,
 android/          Native Kotlin / Compose client (xcodegen-equiv via
                   gradle wrapper, checked in)
 ios/              Native Swift / SwiftUI client (xcodegen-managed)
-tests/            38 Python tests covering everything above
+tests/            55 Python tests covering everything above
 SPEC.md           Protocol specification
 MCP_AGENT_GUIDE.md       Agent integration guide
 REAL_DEVICE_TESTING.md   Manual QA checklist
@@ -275,7 +275,7 @@ two HELLO frames are readable.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
-# Ran 38 tests in ~14 s — OK
+# Ran 55 tests in ~45 s — OK
 ```
 
 Coverage at a glance:
@@ -299,8 +299,8 @@ Coverage at a glance:
 - [x] **v1.1** — MCP server + CLI + cross-device tools protocol
 - [x] **v1.2** — `take_photo` on Android, namespace-flatten in MCP, persistent trust + audit
 - [x] **v1.3** — iOS Phase 1, MCP HTTP transport with scoped tokens, MCP bridge, runtime `register_local_tool`, Trust UI on all platforms
-- [ ] **v1.4** — `safedrop_agent` headless desktop bot: phone (or any peer) sends text via SafeDrop → on-device Anthropic-SDK loop replies via SafeDrop, with per-peer conversation isolation, slash commands (`/reset`, `/tools`), launchd / systemd unit files; iOS file picker (send-from-iPhone)
-- [ ] **v1.5** — Multi-agent mesh: built-in `agent_bus` MCP tools (`send_message`, `recv_messages`, `list_agents`), persistent agent identity (`~/.safedrop/agent_id.json` survives MCP restarts), streaming channel over Streamable-HTTP for long-running sessions; iOS `take_photo` (Phase 2)
+- [x] **v1.4** — `safedrop-agent` headless Anthropic-SDK bot with per-peer conversation isolation, slash commands (`/reset`, `/tools`, `/whoami`, `/history`, `/model`, `/system`), launchd / systemd unit files; iOS file picker (send-from-iPhone)
+- [x] **v1.5** — Multi-agent mesh: agent-bus MCP tools (`send_message`, `recv_messages`, `list_agents`, `whoami`), persistent `agent_id` at `~/.safedrop/agent_id.json` (survives MCP restarts); iOS `take_photo` (Phase 2)
 - [ ] **v1.6** — Real Continuity layer: state handoff (start writing on Mac → continue on phone), notification mirroring, capability-token mint / revoke UI in the desktop + Android + iOS GUIs (no CLI required)
 - [ ] **v1.7** — Cross-LAN without sacrificing "no-cloud": opt-in Tailscale / WireGuard overlay integration with auto-add-manual-peer for the tailnet, optional federated rendezvous relay (community-hosted), WebRTC hole-punching via public STUN — all three are opt-in and the default stays LAN-only
 - [ ] **v2.0** — "Continuity OS" wedge: cross-device input sharing (keyboard / mouse, à la Logitech Flow), Sidecar-style window streaming, phone-as-webcam, workspace tags (walk to any desk → tap → your environment appears)

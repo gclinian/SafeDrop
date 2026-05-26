@@ -60,6 +60,8 @@ from safedrop.headless import (
 )
 from safedrop.transfer import TransferState
 
+from .agent_bus import AgentBus
+from .agent_identity import AgentIdentity, load_or_create as load_agent_identity
 from .policy import Policy, resolve as resolve_policy
 
 
@@ -361,6 +363,63 @@ def _static_tool_defs() -> list[types.Tool]:
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
+        # ---- v1.5 agent_bus ------------------------------------------
+        types.Tool(
+            name="list_agents",
+            description=(
+                "Discover other AI agents reachable through SafeDrop on the LAN. "
+                "Returns a list of {agent_id, label, peer_slug, peer_name, platform}. "
+                "Use the agent_id with send_message."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"timeout_seconds": {"type": "integer", "default": 5}},
+            },
+        ),
+        types.Tool(
+            name="send_message",
+            description=(
+                "Send a text message to another agent on the LAN, addressed by agent_id "
+                "(preferred, stable across reboots) or by peer slug. Delivered via the "
+                "encrypted SafeDrop CALL_TOOL channel; the receiving agent will see it "
+                "next time it calls recv_messages."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "to_agent": {
+                        "type": "string",
+                        "description": "Target agent_id (preferred) or peer slug from list_agents.",
+                    },
+                    "content": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "default": 15},
+                },
+                "required": ["to_agent", "content"],
+            },
+        ),
+        types.Tool(
+            name="recv_messages",
+            description=(
+                "Drain this agent's inbox of messages sent by other agents via send_message. "
+                "Returns the most-recent ``limit`` messages whose timestamp is greater than "
+                "``since_ts`` (a float epoch second; use 0 to read everything)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "since_ts": {"type": "number", "default": 0},
+                    "limit":    {"type": "integer", "default": 100},
+                },
+            },
+        ),
+        types.Tool(
+            name="whoami",
+            description=(
+                "Return this agent's persistent identity: {agent_id, label}. "
+                "agent_id is stable across safedrop-mcp restarts."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -369,6 +428,7 @@ def _static_tool_defs() -> list[types.Tool]:
 
 server: Server = Server("safedrop")
 service: Optional[HeadlessSafeDrop] = None
+agent_bus: Optional[AgentBus] = None
 
 
 def _text(payload: Any) -> list[types.ContentBlock]:
@@ -573,6 +633,106 @@ async def handle_call_tool(name: str, arguments: dict | None) -> Sequence[types.
             bridges = _bridge_callable.list_tool_specs()
         return _text({"dynamic": dyn, "bridges": bridges})
 
+    # ---- v1.5 agent_bus ---------------------------------------------
+    if name == "whoami":
+        if agent_bus is None:
+            return _text({"error": "agent_bus not initialised"})
+        return _text(agent_bus.whoami())
+
+    if name == "recv_messages":
+        if agent_bus is None:
+            return _text({"error": "agent_bus not initialised"})
+        since_ts = float(args.get("since_ts", 0) or 0)
+        limit = int(args.get("limit", 100) or 100)
+        return _text({
+            "agent_id": agent_bus.identity.agent_id,
+            "messages": agent_bus.read_inbox(since_ts=since_ts, limit=limit),
+        })
+
+    if name == "list_agents":
+        if service is None:
+            return _text({"error": "service not initialised"})
+        timeout = float(args.get("timeout_seconds", 5))
+        peers = service.discovery.snapshot() if service.discovery else {}
+        capable = [p for p in peers.values() if p.has_capability("safedrop.tools")]
+
+        async def _probe(peer: Peer) -> dict | None:
+            try:
+                outcome = await asyncio.to_thread(
+                    service.transfer.call_remote_tool, peer, "agent_bus_whoami", {}, timeout
+                )
+            except Exception:
+                return None
+            res = outcome.get("result") if isinstance(outcome, dict) else None
+            if not isinstance(res, dict):
+                return None
+            return {
+                "agent_id": str(res.get("agent_id") or ""),
+                "label":    str(res.get("label") or ""),
+                "peer_slug": _peer_slug(peer),
+                "peer_name": peer.name,
+                "platform": peer.platform,
+                "ip": peer.ip,
+            }
+
+        rows = await asyncio.gather(*(_probe(p) for p in capable), return_exceptions=True)
+        agents = [r for r in rows if isinstance(r, dict) and r.get("agent_id")]
+        # Include ourselves so the agent knows its own id without an extra call.
+        if agent_bus is not None:
+            agents.insert(0, {
+                "agent_id": agent_bus.identity.agent_id,
+                "label":    agent_bus.identity.label,
+                "peer_slug": "(self)",
+                "peer_name": service.device_name if service is not None else "",
+                "platform": "self",
+                "ip": "127.0.0.1",
+                "is_self": True,
+            })
+        return _text(agents)
+
+    if name == "send_message":
+        if agent_bus is None or service is None:
+            return _text({"error": "agent_bus not initialised"})
+        to_agent = str(args.get("to_agent") or "").strip()
+        content = str(args.get("content") or "")
+        timeout = float(args.get("timeout_seconds", 15))
+        if not to_agent or not content:
+            return _text({"error": "to_agent and content are required"})
+
+        # Resolve target peer. Try peer slug first (cheap), then agent_id (needs whoami probe).
+        peer = _find_peer_by_slug(to_agent)
+        if peer is None and service.discovery is not None:
+            for candidate in service.discovery.snapshot().values():
+                if not candidate.has_capability("safedrop.tools"):
+                    continue
+                try:
+                    outcome = await asyncio.to_thread(
+                        service.transfer.call_remote_tool,
+                        candidate, "agent_bus_whoami", {}, 5.0,
+                    )
+                except Exception:
+                    continue
+                res = outcome.get("result") if isinstance(outcome, dict) else None
+                if isinstance(res, dict) and str(res.get("agent_id") or "") == to_agent:
+                    peer = candidate
+                    break
+        if peer is None:
+            return _text({"error": f"no agent matching {to_agent!r}. Try list_agents."})
+
+        try:
+            outcome = await asyncio.to_thread(
+                service.transfer.call_remote_tool, peer, "agent_bus_recv",
+                {
+                    "from_agent_id": agent_bus.identity.agent_id,
+                    "from_label":    agent_bus.identity.label,
+                    "content":       content,
+                },
+                timeout,
+            )
+        except Exception as exc:
+            return _text({"error": f"{type(exc).__name__}: {exc}"})
+        return _text({"peer": peer.name, "to_agent": to_agent, **outcome})
+
     return _text({"error": f"unknown tool {name!r}"})
 
 
@@ -600,7 +760,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _main_async(args: argparse.Namespace) -> None:
-    global service, _policy
+    global service, _policy, agent_bus
     _policy = resolve_policy(
         allow_arg=args.allow,
         deny_arg=args.deny,
@@ -608,6 +768,15 @@ async def _main_async(args: argparse.Namespace) -> None:
     )
     name_suffix = args.name_suffix or _policy.name_suffix or "MCP"
     service = HeadlessSafeDrop(name_suffix=name_suffix)
+
+    # ---- v1.5 agent_bus -----------------------------------------------
+    # Initialise stable agent identity + mailbox, register the two peer
+    # tools (agent_bus_whoami, agent_bus_recv) on our ToolRegistry so
+    # other agents on the LAN can discover/message us.
+    identity = load_agent_identity(label=service.device_name)
+    agent_bus = AgentBus(identity=identity)
+    agent_bus.register_peer_tools(service.tool_registry)
+
     service.start()
     # Configure MCP bridges (Phase X.4) if requested.
     bridge_mgr = None

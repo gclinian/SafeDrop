@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd user agent for SafeDrop's headless LLM bot.
+
+  Install:
+    cp scripts/com.safedrop.agent.plist ~/Library/LaunchAgents/
+    # Edit the file to point ProgramArguments to your safedrop-agent binary
+    # and to set ANTHROPIC_API_KEY in EnvironmentVariables.
+    launchctl load ~/Library/LaunchAgents/com.safedrop.agent.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.safedrop.agent.plist
+    rm ~/Library/LaunchAgents/com.safedrop.agent.plist
+
+  Logs:
+    tail -f ~/Library/Logs/safedrop-agent.log
+    tail -f ~/Library/Logs/safedrop-agent.err.log
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+                       "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.safedrop.agent</string>
+
+    <!-- Edit these paths to match your install location. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/safedrop-agent</string>
+        <string>--name-suffix</string>
+        <string>agent</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Set your API key here, OR pass it via --api-key in ProgramArguments. -->
+        <key>ANTHROPIC_API_KEY</key>
+        <string>REPLACE_WITH_YOUR_KEY</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/safedrop-agent.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/safedrop-agent.err.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
