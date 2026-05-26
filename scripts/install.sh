@@ -38,7 +38,10 @@ set -euo pipefail
 SAFEDROP_HOME="${SAFEDROP_HOME:-$HOME/.local/share/safedrop}"
 SAFEDROP_BIN="${SAFEDROP_BIN:-$HOME/.local/bin}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-FROM_RELEASE=0
+# Default = pull the latest wheel from GitHub Releases. SafeDrop isn't on
+# PyPI yet; pass --from-pypi to override.
+FROM_RELEASE=1
+FROM_PYPI=0
 RELEASE_TAG=""
 
 # ---- terminal pretty-printing -------------------------------------
@@ -61,8 +64,9 @@ done_ok() { echo "${GREEN}ok${RESET}  $1"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --from-release) FROM_RELEASE=1; shift ;;
-        --release-tag)  RELEASE_TAG="$2"; FROM_RELEASE=1; shift 2 ;;
+        --from-release) FROM_RELEASE=1; FROM_PYPI=0; shift ;;
+        --from-pypi)    FROM_PYPI=1; FROM_RELEASE=0; shift ;;
+        --release-tag)  RELEASE_TAG="$2"; FROM_RELEASE=1; FROM_PYPI=0; shift 2 ;;
         --python)       PYTHON_BIN="$2"; shift 2 ;;
         --home)         SAFEDROP_HOME="$2"; shift 2 ;;
         --bin)          SAFEDROP_BIN="$2"; shift 2 ;;
@@ -162,6 +166,11 @@ done_ok "venv ready"
 
 step "installing safedrop into the venv"
 "$VENV/bin/pip" install --upgrade --quiet pip
+if [ "$FROM_PYPI" -eq 1 ]; then
+    warn "safedrop is not on PyPI yet — --from-pypi will fail. Falling back to GitHub Releases."
+    FROM_PYPI=0
+    FROM_RELEASE=1
+fi
 if [ "$FROM_RELEASE" -eq 1 ]; then
     if [ -z "$RELEASE_TAG" ]; then
         # Pick latest release tag from the GitHub API.
@@ -184,6 +193,8 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
     "$VENV/bin/pip" install --quiet "$TMPDIR/$WHEEL[mcp]"
     rm -rf "$TMPDIR"
 else
+    # Currently unreachable — FROM_PYPI is auto-flipped to FROM_RELEASE
+    # above until safedrop is published to PyPI. Kept for future-readiness.
     "$VENV/bin/pip" install --quiet --upgrade 'safedrop[mcp]'
 fi
 INSTALLED_VERSION=$("$VENV/bin/safedrop" --help 2>/dev/null | head -1 || echo "unknown")

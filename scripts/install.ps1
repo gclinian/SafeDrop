@@ -28,11 +28,19 @@
 
 [CmdletBinding()]
 param(
-    [switch]$FromRelease,
+    # SafeDrop isn't on PyPI yet — default is to pull the latest wheel
+    # from GitHub Releases. Pass -FromPyPI once that changes.
+    [switch]$FromRelease = $true,
+    [switch]$FromPyPI,
     [string]$ReleaseTag = "",
     [string]$Home_ = (Join-Path $env:LOCALAPPDATA "SafeDrop"),
     [string]$Python = ""
 )
+if ($FromPyPI.IsPresent) {
+    Write-Host "warn: safedrop is not on PyPI yet — falling back to GitHub Releases." -ForegroundColor Yellow
+    $FromPyPI = $false
+    $FromRelease = $true
+}
 
 $ErrorActionPreference = "Stop"
 
