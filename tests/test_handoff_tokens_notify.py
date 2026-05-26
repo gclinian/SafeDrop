@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from safedrop.handoff import HandoffEntry, HandoffStore, MAX_CONTENT_LEN  # noqa: E402
 from safedrop.tools import ToolRegistry  # noqa: E402
 from safedrop_mcp import handoff_tools as _ht  # noqa: E402
-from safedrop_mcp.notification_tools import (  # noqa: E402
+from safedrop.notifications import (  # noqa: E402
     _handle as notify_handle,
     bus as notification_bus,
     register_notification_peer_tool,

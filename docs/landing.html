@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SafeDrop — Secure LAN sharing + cross-device MCP fabric</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Zero-config LAN file & clipboard sharing — with a built-in cross-device Model Context Protocol fabric so AI agents on your laptop, phone, and Pi can see each other's tools.">
+<meta property="og:title" content="SafeDrop">
+<meta property="og:description" content="Zero-config LAN file & clipboard sharing — with a cross-device MCP fabric for AI agents.">
+<style>
+  :root {
+    --bg: #0d0f17;
+    --surface: #161927;
+    --surface-alt: #1d2133;
+    --border: #2a2f47;
+    --accent: #6aa8ff;
+    --accent-warm: #ffb86b;
+    --text: #e7eaf3;
+    --text-dim: #97a0bc;
+    --green: #5fd49f;
+    --red: #ff7373;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+                 Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  pre, code {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  code { font-size: 0.92em; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+  header.hero {
+    padding: 96px 0 64px;
+    text-align: center;
+    background: radial-gradient(ellipse at top,
+                rgba(106,168,255,0.10) 0%, transparent 60%);
+  }
+  header.hero h1 {
+    font-size: 56px;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0 0 18px;
+  }
+  header.hero .tagline {
+    font-size: 22px;
+    color: var(--text-dim);
+    max-width: 720px;
+    margin: 0 auto 32px;
+  }
+  header.hero .ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 15px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    transition: transform 0.08s, border-color 0.15s;
+  }
+  .btn:hover { transform: translateY(-1px); border-color: var(--accent); text-decoration: none; }
+  .btn.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); }
+  .badges { margin: 24px 0 0; }
+  .badges img { margin: 0 4px; height: 22px; vertical-align: middle; }
+
+  section { padding: 64px 0; border-top: 1px solid var(--border); }
+  section h2 {
+    font-size: 32px;
+    letter-spacing: -0.01em;
+    margin: 0 0 8px;
+  }
+  section .lead {
+    color: var(--text-dim);
+    max-width: 720px;
+    margin: 0 0 36px;
+    font-size: 17px;
+  }
+
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+  }
+  .feature {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+  }
+  .feature h3 {
+    font-size: 17px;
+    margin: 0 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .feature p { margin: 0; color: var(--text-dim); font-size: 14.5px; }
+  .feature .icon { font-size: 20px; }
+
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    align-items: start;
+  }
+  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
+
+  .arch {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+    font-family: "JetBrains Mono", "SF Mono", monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .arch .h { color: var(--accent); }
+  .arch .w { color: var(--accent-warm); }
+
+  table.matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+    margin-top: 8px;
+  }
+  table.matrix th, table.matrix td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.matrix th { color: var(--text-dim); font-weight: 600; font-size: 13px; }
+  table.matrix td.ok { color: var(--green); }
+  table.matrix td.no { color: var(--red); }
+
+  footer {
+    padding: 48px 0 80px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 14px;
+  }
+  footer a { color: var(--text-dim); }
+  .kicker {
+    text-transform: uppercase;
+    font-size: 12.5px;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <div class="kicker">no cloud · no account · LAN direct</div>
+    <h1>SafeDrop</h1>
+    <p class="tagline">
+      Zero-config file &amp; clipboard sharing on your LAN —
+      with a built-in <strong>cross-device MCP fabric</strong> so the AI agents on your
+      laptop, phone, and Pi can see each other's tools.
+    </p>
+    <div class="ctas">
+      <a class="btn primary" href="https://github.com/gclinian/SafeDrop">View on GitHub</a>
+      <a class="btn" href="https://github.com/gclinian/SafeDrop/releases">Download</a>
+      <a class="btn" href="https://github.com/gclinian/SafeDrop/blob/main/MCP_AGENT_GUIDE.md">MCP guide</a>
+    </div>
+    <div class="badges">
+      <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
+      <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
+      <img src="https://img.shields.io/badge/tests-102%2F102_passing-brightgreen.svg" alt="Tests passing">
+      <img src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows_·_iOS_·_Android-lightgrey.svg" alt="Platforms">
+      <img src="https://img.shields.io/badge/MCP-stdio_+_HTTP-orange.svg" alt="MCP">
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="container">
+    <h2>What it does, in one breath</h2>
+    <p class="lead">
+      Run SafeDrop on two devices on the same Wi-Fi — they find each other,
+      pair with a 4-digit code, and from then on you can drop files and
+      clipboard between them end-to-end encrypted. Layer 2 is the
+      <strong>cross-device MCP fabric</strong>: any AI agent (Claude Code, Cursor, Goose,
+      Cline, Claude Desktop) on one device can call tools exposed by the
+      others — read the phone's clipboard, take a photo with the phone's
+      camera, run a shell command on a remote box — all over the same
+      encrypted channel.
+    </p>
+    <div class="features">
+      <div class="feature">
+        <h3><span class="icon">🔒</span>End-to-end encrypted</h3>
+        <p>X25519 ECDH → HKDF-SHA256 → Fernet (AES-128-CBC + HMAC-SHA256). Pair-code confirms the handshake. Same wire format byte-for-byte across Python / Kotlin / Swift.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="icon">🌐</span>Zero-config discovery</h3>
+        <p>UDP broadcast on the LAN. No router setup, no accounts, no QR codes. Manual-peer mode lets you connect across LANs with Tailscale or our discovery beacon.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="icon">🤖</span>MCP fabric</h3>
+        <p>Stdio for Claude Code / Cursor / Goose / Cline. HTTP Streamable-MCP with bearer tokens for cloud agents. Bridge other MCP servers under one namespace.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="icon">📱</span>5 native clients</h3>
+        <p>Python desktop GUI (tkinter), Kotlin Jetpack Compose Android app, Swift SwiftUI iOS app, headless CLI, MCP server. All speak the same protocol.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="icon">🧠</span>Multi-agent mesh</h3>
+        <p>Persistent <code>agent_id</code> per device. <code>send_message</code> / <code>recv_messages</code> / <code>list_agents</code> let agents on different boxes talk to each other autonomously.</p>
+      </div>
+      <div class="feature">
+        <h3><span class="icon">🪞</span>Trust + audit</h3>
+        <p>Per-(peer, tool) decisions persisted to <code>~/.safedrop/trust.json</code>. Every cross-device call lands in an append-only audit log. Capability tokens for scoped HTTP access.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>The architecture, in one picture</h2>
+    <p class="lead">Same protocol, three native implementations, four MCP tool sources.</p>
+    <div class="arch"><span class="h">┌─────────────────── your LAN ────────────────────┐</span>
+
+      <span class="w">macOS desktop</span>            <span class="w">iPhone</span>            <span class="w">Linux box</span>
+      ┌──────────────┐         ┌────────┐        ┌───────────┐
+      │ safedrop-mcp │◀───────▶│ iOS    │        │ Pi / NUC  │
+      │   + GUI      │  ECDH   │ app    │◀─────▶│ agent     │
+      │   + agent    │  AES    └────────┘   ECDH └───────────┘
+      └─────┬────────┘         (4-digit)         (TCP 47891)
+            │  stdio / HTTP
+            ▼
+      <span class="h">Claude Code</span>
+      <span class="h">Cursor / Goose / Cline / Claude Desktop</span>
+
+         each agent sees a flat tool list:
+            list_devices             ← static MCP tools
+            send_file / send_text
+            iphone_a3b1__read_clipboard      ← dynamic peer tools
+            iphone_a3b1__take_photo
+            macbook_9f02__write_clipboard
+            bridge.github.create_issue       ← bridged MCP servers
+            my_db_query                       ← register_local_tool
+            send_message / list_agents       ← multi-agent mesh
+            tokens_mint / handoff_save /     ← v1.6 continuity</div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>30-second install</h2>
+    <p class="lead">
+      Desktop / CLI / MCP server install in one line. Android &amp; iOS clients ship as APK / IPA on GitHub Releases.
+    </p>
+<pre><code>$ pip install -e <span style="color:var(--accent-warm)">'safedrop[mcp]'</span>           <span style="color:var(--text-dim)"># desktop, CLI, MCP, tokens</span>
+
+<span style="color:var(--text-dim)"># desktop GUI (needs tkinter)</span>
+$ python run.py
+
+<span style="color:var(--text-dim)"># headless CLI</span>
+$ safedrop ls
+$ safedrop send-text macbook <span style="color:var(--accent-warm)">"hello from the terminal"</span>
+
+<span style="color:var(--text-dim)"># expose as MCP tools to Claude Code</span>
+$ claude mcp add safedrop -- <span style="color:var(--accent)">$(which safedrop-mcp)</span>
+
+<span style="color:var(--text-dim)"># headless LLM bot reachable on the LAN (v1.4)</span>
+$ ANTHROPIC_API_KEY=... safedrop-agent --name-suffix agent
+
+<span style="color:var(--text-dim)"># cross-LAN discovery without a relay (v1.7)</span>
+$ safedrop tailscale list
+$ safedrop-beacon --bind 0.0.0.0:47900 --secret <span style="color:var(--accent-warm)">$(openssl rand -hex 16)</span></code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>What's on each platform</h2>
+    <p class="lead">All five clients implement the same wire protocol byte-for-byte.</p>
+    <table class="matrix">
+      <thead>
+        <tr><th>Capability</th>
+            <th>Python desktop GUI</th>
+            <th>Python CLI / MCP</th>
+            <th>Android (Kotlin)</th>
+            <th>iOS (Swift)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>File transfer</td>
+            <td class="ok">✓</td><td class="ok">✓</td>
+            <td class="ok">✓</td><td class="ok">✓ (send only)</td></tr>
+        <tr><td>Clipboard / text</td>
+            <td class="ok">✓</td><td class="ok">✓</td>
+            <td class="ok">✓</td><td class="ok">✓</td></tr>
+        <tr><td>Trust / Allow-Deny dialog</td>
+            <td class="ok">✓</td><td class="ok">allow-all (headless)</td>
+            <td class="ok">✓</td><td class="ok">✓</td></tr>
+        <tr><td>take_photo peer tool</td>
+            <td class="no">–</td><td class="no">–</td>
+            <td class="ok">✓</td><td class="ok">✓</td></tr>
+        <tr><td>show_notification peer tool</td>
+            <td class="ok">tkinter banner</td><td class="ok">bus only</td>
+            <td class="ok">NotificationManager</td><td class="ok">UNUserNotificationCenter</td></tr>
+        <tr><td>Token UI</td>
+            <td class="ok">✓</td><td class="ok">CLI</td>
+            <td class="no">(cross-device)</td><td class="ok">cross-device</td></tr>
+        <tr><td>MCP stdio / HTTP server</td>
+            <td class="no">–</td><td class="ok">✓</td>
+            <td class="no">–</td><td class="no">–</td></tr>
+        <tr><td>Multi-agent mesh (agent_bus)</td>
+            <td class="no">–</td><td class="ok">✓</td>
+            <td class="no">–</td><td class="no">–</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>The security model, in three lines</h2>
+    <p class="lead">No magic — just well-understood primitives composed carefully.</p>
+    <div class="features">
+      <div class="feature">
+        <h3>1. Discovery is unauthenticated.</h3>
+        <p>UDP HELLOs on the LAN carry the device's <code>X25519</code> pubkey and TCP port. Anyone on the same LAN sees them. That's fine — pairing happens at TCP-time.</p>
+      </div>
+      <div class="feature">
+        <h3>2. Each TCP session ECDH's a fresh Fernet key.</h3>
+        <p><code>HKDF-SHA256</code> derives the symmetric key from the X25519 shared secret. The 4-digit pair code is derived from the same secret so both sides can verify the link out-of-band.</p>
+      </div>
+      <div class="feature">
+        <h3>3. Cross-device tool calls go through a per-(peer, tool) trust gate.</h3>
+        <p>Allow / Deny dialog on first use; <code>"Always allow"</code> persists to <code>~/.safedrop/trust.json</code>. HTTP transport adds bearer-token auth with fnmatch-glob scopes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>Status &amp; what's next</h2>
+    <p class="lead">SafeDrop is at <strong>v1.5+</strong> with all roadmap items through v1.7 shipped (sans deferred WebRTC).</p>
+    <table class="matrix">
+      <thead><tr><th>Version</th><th>Status</th><th>Highlights</th></tr></thead>
+      <tbody>
+        <tr><td>v1.0 – v1.3</td><td class="ok">✓ shipped</td>
+            <td>LAN transfer, MCP server, iOS Phase 1, HTTP transport, MCP bridge, register_local_tool, trust UI.</td></tr>
+        <tr><td>v1.4</td><td class="ok">✓ shipped</td>
+            <td><code>safedrop-agent</code> headless Anthropic bot with per-peer convs + slash commands; iOS file picker; launchd / systemd units.</td></tr>
+        <tr><td>v1.5</td><td class="ok">✓ shipped</td>
+            <td>Multi-agent mesh: <code>agent_id.json</code>, <code>send_message</code>, <code>recv_messages</code>, <code>list_agents</code>; iOS <code>take_photo</code>.</td></tr>
+        <tr><td>v1.6</td><td class="ok">✓ shipped</td>
+            <td>Continuity primitives: tokens UI, state handoff, notification mirroring (native rendering on all platforms).</td></tr>
+        <tr><td>v1.7</td><td class="ok">✓ shipped</td>
+            <td>Opt-in cross-LAN: Tailscale integration + <code>safedrop-beacon</code> discovery service.</td></tr>
+        <tr><td>v2.0</td><td>research</td>
+            <td>Cross-device input sharing (Logitech Flow-style), Sidecar window streaming, phone-as-webcam, workspace tags.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    Built as an NTU CN final project. Open-source, MIT-licensed.<br>
+    <a href="https://github.com/gclinian/SafeDrop">github.com/gclinian/SafeDrop</a>
+  </div>
+</footer>
+
+</body>
+</html>

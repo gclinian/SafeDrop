@@ -875,10 +875,10 @@ async def handle_call_tool(name: str, arguments: dict | None) -> Sequence[types.
 
     # ---- v1.6 notifications -----------------------------------------
     if name == "show_notification":
-        from .notification_tools import _handle as _show
+        from safedrop.notifications import _handle as _show
         return _text(_show(args))
     if name == "notifications_recent":
-        from .notification_tools import bus as _nbus
+        from safedrop.notifications import bus as _nbus
         limit = int(args.get("limit", 50) or 50)
         return _text({"notifications": _nbus.recent(limit=limit)})
 
@@ -939,7 +939,7 @@ async def _main_async(args: argparse.Namespace) -> None:
     register_handoff_peer_tools(service.tool_registry)
 
     # ---- v1.6 notifications ------------------------------------------
-    from .notification_tools import register_notification_peer_tool
+    from safedrop.notifications import register_notification_peer_tool
     register_notification_peer_tool(service.tool_registry)
 
     service.start()

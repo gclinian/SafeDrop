@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import UserNotifications
 
 /// Synchronous handler signature. Tools that need MainActor (e.g.
 /// UIPasteboard) bounce through DispatchQueue.main.sync internally.
@@ -83,6 +84,54 @@ func buildDefaultRegistry(photoBroker: PhotoBroker? = nil) -> ToolRegistry {
             let content = (args["content"] as? String) ?? ""
             DispatchQueue.main.sync { UIPasteboard.general.string = content }
             return ["status": "ok", "wrote_chars": content.count]
+        }
+    ))
+
+    // ---- show_notification (v1.6) ----
+    // Drops a banner via UNUserNotificationCenter. The Allow/Deny dialog
+    // has already gated the call at the SafeDrop layer; iOS's own
+    // notification authorisation is requested on app start.
+    reg.register(ToolSpec(
+        name: "show_notification",
+        description:
+            "Show a notification on this iPhone. Renders as a system banner " +
+            "via UNUserNotificationCenter. Returns once enqueued; no user " +
+            "interaction expected. Requires the user to have allowed " +
+            "notifications for SafeDrop in iOS Settings.",
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "title": ["type": "string"],
+                "body":  ["type": "string"],
+                "level": ["type": "string",
+                          "enum": ["info", "warn", "error"],
+                          "default": "info"],
+            ],
+        ],
+        handler: { args in
+            let title = (args["title"] as? String) ?? ""
+            let body  = (args["body"] as? String) ?? ""
+            if title.isEmpty && body.isEmpty {
+                throw NSError(domain: "SafeDrop", code: 21,
+                              userInfo: [NSLocalizedDescriptionKey: "title or body required"])
+            }
+            let content = UNMutableNotificationContent()
+            content.title = title.isEmpty ? "SafeDrop" : title
+            content.body  = body
+            content.sound = .default
+
+            // 1 s trigger — UNTimeIntervalNotificationTrigger requires
+            // strictly positive seconds. The user sees this as "instant".
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1.0, repeats: false)
+            let request = UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: trigger
+            )
+            // Fire-and-forget — UN's API is async; we don't need to wait
+            // and the SafeDrop caller just wants "enqueued".
+            UNUserNotificationCenter.current().add(request) { _ in }
+            return ["status": "shown"]
         }
     ))
 

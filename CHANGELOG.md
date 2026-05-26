@@ -5,6 +5,55 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-26
+
+The "actually finish v1.6 + introduce the project" release. Closes
+out the cross-platform native rendering of v1.6 primitives and ships
+the docs needed to onboard new users / contributors.
+
+### Added — native notification rendering on all 3 platforms
+- **Python tkinter banner** for inbound `show_notification`. `gui.py`
+  subscribes to `safedrop.notifications.bus.on_notification` and pops
+  a transient Toplevel (auto-dismiss after 8 s, color-coded by
+  `info`/`warn`/`error`).
+- **iOS UNUserNotificationCenter** — new `show_notification` handler
+  in `ios/SafeDrop/Tools.swift` drops a system banner via
+  `UNTimeIntervalNotificationTrigger`. App requests `.alert` + `.sound`
+  authorization on launch.
+- **Android NotificationManager** — new `show_notification` handler
+  in `android/.../net/ToolRegistry.kt` posts via
+  `NotificationCompat.Builder` with a lazy-created channel. Added
+  `POST_NOTIFICATIONS` permission to AndroidManifest and runtime
+  request via `ActivityResultContracts.RequestPermission` in
+  MainActivity for API 33+.
+- **Moved `notification_tools.py`** from `safedrop_mcp/` to
+  `safedrop/notifications.py` so the desktop GUI can use it without
+  the `[mcp]` extra installed. MCP server imports updated.
+
+### Added — iOS token management UI
+- New `ios/SafeDrop/TokenAdminView.swift` — SwiftUI screen that calls
+  the cross-device peer tools (`tokens_list`, `tokens_mint`,
+  `tokens_revoke`) on a selected SafeDrop peer (the desktop running
+  `safedrop-mcp`). Mint form with label / scope / TTL fields;
+  one-time secret reveal sheet on success.
+- Toolbar **key** icon in `HomeView` opens `TokenAdminView` when the
+  selected peer advertises `safedrop.tools`.
+
+### Added — introducing the project
+- **`docs/landing.html`** — single-page self-contained landing page
+  (no external deps, dark theme, hero + features + architecture
+  diagram + install snippet + cross-platform capability matrix +
+  security model + roadmap). The thing you link from a README badge.
+- **`docs/pitch.md`** — 30-second + 2-minute pitches for a HN post /
+  Twitter thread.
+- **`docs/demo-recipes.md`** — six tight live-demo recipes (each
+  ~30-90 s), with exact commands + audience-facing punchline. Covers
+  cross-platform AirDrop, agent-with-phone-camera, two-agent mesh,
+  state handoff, mobile token mint, and Tailscale cross-LAN.
+
+### Changed
+- `pyproject.toml` → `1.6.0`.
+
 ## [1.5.0] — 2026-05-26
 
 The "continuity primitives + opt-in cross-LAN" release. Closes out the

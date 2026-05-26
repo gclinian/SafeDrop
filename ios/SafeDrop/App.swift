@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import UserNotifications
 
 @main
 struct SafeDropApp: App {
@@ -10,7 +11,15 @@ struct SafeDropApp: App {
         WindowGroup {
             HomeView()
                 .environmentObject(service)
-                .onAppear { service.start() }
+                .onAppear {
+                    service.start()
+                    // v1.6: ask for notification permission once so
+                    // show_notification can drop banners from paired peers.
+                    // The user can revoke in Settings; we don't pester.
+                    UNUserNotificationCenter.current().requestAuthorization(
+                        options: [.alert, .sound]
+                    ) { _, _ in }
+                }
         }
     }
 }
@@ -47,6 +56,13 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(destination: TrustView()) { Image(systemName: "lock.shield") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if let peer = selectedPeer, peer.hasCapability("safedrop.tools") {
+                        NavigationLink(destination: TokenAdminView(peer: peer)) {
+                            Image(systemName: "key.fill")
+                        }
+                    }
                 }
             }
             .sheet(isPresented: $showAddPeer) {

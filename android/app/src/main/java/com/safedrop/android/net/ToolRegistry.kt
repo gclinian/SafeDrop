@@ -1,10 +1,13 @@
 package com.safedrop.android.net
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.util.Base64
+import androidx.core.app.NotificationCompat
 import com.safedrop.android.photo.PhotoCapturer
 import com.safedrop.android.photo.PhotoResult
 import org.json.JSONArray
@@ -133,6 +136,64 @@ fun buildDefaultRegistry(
                 put("status", "ok")
                 put("wrote_chars", content.length)
             }
+        },
+    ))
+
+    // ---- show_notification (v1.6) ------------------------------------
+    // Drops a system-tray notification via NotificationManager. The
+    // POST_NOTIFICATIONS permission is requested on first launch for
+    // Android 13+; channels are required from API 26+. We create the
+    // channel lazily on first call so the registry build is cheap.
+    val notificationChannelId = "safedrop.peer-notifications"
+    var channelEnsured = false
+    reg.register(ToolSpec(
+        name = "show_notification",
+        description =
+            "Show a system notification on this Android device via " +
+            "NotificationManager. Renders in the notification shade. " +
+            "Returns once enqueued — no user interaction expected.",
+        inputSchema = JSONObject().apply {
+            put("type", "object")
+            put("properties", JSONObject().apply {
+                put("title", JSONObject().put("type", "string"))
+                put("body",  JSONObject().put("type", "string"))
+                put("level", JSONObject().apply {
+                    put("type", "string")
+                    put("default", "info")
+                })
+            })
+        },
+        handler = { args ->
+            val title = args.optString("title", "").ifEmpty { "SafeDrop" }
+            val body  = args.optString("body", "")
+            if (title.isEmpty() && body.isEmpty()) {
+                throw IllegalArgumentException("title or body required")
+            }
+            val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // Lazy-create channel on API 26+.
+            if (!channelEnsured && Build.VERSION.SDK_INT >= 26) {
+                val ch = NotificationChannel(
+                    notificationChannelId,
+                    "SafeDrop peer notifications",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = "Banners pushed via show_notification from paired SafeDrop peers."
+                }
+                nm.createNotificationChannel(ch)
+                channelEnsured = true
+            }
+
+            val notif = NotificationCompat.Builder(app, notificationChannelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            nm.notify(System.currentTimeMillis().toInt(), notif)
+            JSONObject().apply { put("status", "shown") }
         },
     ))
 

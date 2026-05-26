@@ -1,13 +1,16 @@
 """Cross-device notification mirroring (v1.6).
 
-Adds a ``show_notification`` peer tool to the local SafeDrop registry.
-When another paired device calls it, the call is recorded in a
-ring-buffer and any subscribed callback fires (the desktop GUI uses
-that hook to pop a tkinter banner; iOS / Android can do platform-
-native notifications via their own tool implementations).
+Lives in safedrop **core** (not safedrop_mcp) so the desktop GUI can
+render banners without depending on the optional ``[mcp]`` extra.
+The :data:`bus` is a module-level singleton both the desktop GUI and
+the MCP server attach to.
 
-This module owns *just* the Python side. iOS and Android have their
-own ``show_notification`` registered in their respective ToolRegistry.
+Adds a ``show_notification`` peer tool to the local SafeDrop registry.
+When another paired device calls it, the call is recorded in the
+ring-buffer and any subscribed callback fires (the desktop GUI uses
+that hook to pop a tkinter banner; iOS / Android register their own
+``show_notification`` handlers that talk to
+UNUserNotificationCenter / NotificationManager).
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from collections import deque
 from threading import Lock
 from typing import Any, Callable, Deque, Optional
 
-from safedrop.tools import ToolRegistry, ToolSpec
+from .tools import ToolRegistry, ToolSpec
 
 
 NotificationCallback = Callable[[dict[str, Any]], None]

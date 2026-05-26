@@ -20,6 +20,7 @@ import pyperclip
 from .config import DOWNLOAD_DIR, TCP_PORT, default_device_name, new_device_id
 from .crypto import Identity
 from .discovery import DiscoveryService, Peer
+from .notifications import bus as _notification_bus, register_notification_peer_tool
 from .tools import build_default_registry
 from .transfer import (
     ClipboardPayload,
@@ -89,6 +90,10 @@ class SafeDropApp:
         self.trust_policy = TrustPolicy()
         self.audit_writer = AuditWriter()
         self.tool_registry = build_default_registry()
+        # v1.6: cross-device notifications. Other devices can call
+        # show_notification on us; the bus callback pops a banner here.
+        register_notification_peer_tool(self.tool_registry)
+        _notification_bus.on_notification = self._render_notification_banner
         self._audit_entries: list[ToolCallAuditEntry] = []
 
         # ---- backend services ----
@@ -617,6 +622,53 @@ class SafeDropApp:
         except Exception:
             pass
         self.root.after(0, lambda: self._append_audit_row(entry))
+
+    # ------------------------------------------------------------------
+    # v1.6 — render an inbound show_notification as a tkinter banner.
+    # Called from the NotificationBus worker thread; marshal onto the
+    # GUI thread before touching widgets.
+    # ------------------------------------------------------------------
+    def _render_notification_banner(self, entry: dict) -> None:
+        self.root.after(0, lambda e=entry: self._show_notification_banner(e))
+
+    def _show_notification_banner(self, entry: dict) -> None:
+        title = str(entry.get("title") or "").strip() or "Notification"
+        body = str(entry.get("body") or "").strip()
+        level = str(entry.get("level") or "info")
+        from_label = str(entry.get("from_label") or "").strip()
+
+        top = tk.Toplevel(self.root)
+        top.title("Notification")
+        top.geometry("420x140+1500+80")   # top-right-ish; off-screen safe
+        top.transient(self.root)
+        top.overrideredirect(False)
+        try:
+            top.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+        color = {"info": "#3a7afe", "warn": "#e2a009", "error": "#cc3333"}.get(level, "#3a7afe")
+        bar = tk.Frame(top, bg=color, height=4)
+        bar.pack(fill="x", side="top")
+
+        body_frame = ttk.Frame(top, padding=12)
+        body_frame.pack(fill="both", expand=True)
+
+        header = ttk.Label(body_frame, text=title, font=("Helvetica", 12, "bold"))
+        header.pack(anchor="w")
+        if from_label:
+            ttk.Label(body_frame, text=f"from {from_label}",
+                      foreground="#888", font=("Helvetica", 9)).pack(anchor="w")
+        if body:
+            ttk.Label(body_frame, text=body, wraplength=380,
+                      justify="left").pack(anchor="w", pady=(6, 0))
+
+        btn_row = ttk.Frame(body_frame)
+        btn_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(btn_row, text="Dismiss", command=top.destroy).pack(side="right")
+
+        # Auto-dismiss after 8 s.
+        top.after(8000, lambda: (top.winfo_exists() and top.destroy()))
 
     # ------------------------------------------------------------------
     # Trust management dialog (Phase 2.1 polish)

@@ -28,9 +28,20 @@ import com.safedrop.android.ui.HomeScreen
 import java.io.File
 
 class MainActivity : ComponentActivity() {
+    // v1.6: POST_NOTIFICATIONS is a runtime permission on API 33+. We
+    // request it once on launch; the user can revoke later via Settings.
+    private val requestNotificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> /* result ignored; show_notification will silently no-op if denied */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val service = (application as SafeDropApplication).service
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestNotificationPermission.launch(
+                android.Manifest.permission.POST_NOTIFICATIONS
+            )
+        }
         setContent {
             val context = LocalContext.current
             val scheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
