@@ -66,6 +66,10 @@ curl -fsSL https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/inst
 iwr -useb https://raw.githubusercontent.com/gclinian/SafeDrop/main/scripts/install.ps1 | iex
 ```
 
+(The script is `iex`-safe — no `param()` block, configuration via env
+vars. If you prefer, the more defensive scriptblock form also works:
+`& ([scriptblock]::Create((iwr -useb …/install.ps1).Content))`.)
+
 The installer verifies Python 3.10+ and tkinter, creates a hermetic
 venv at `~/.local/share/safedrop/venv` (macOS/Linux) or
 `%LOCALAPPDATA%\SafeDrop\venv` (Windows), installs `safedrop[mcp]`
