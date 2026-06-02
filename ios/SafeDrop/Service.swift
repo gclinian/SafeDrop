@@ -65,16 +65,17 @@ final class SafeDropService: ObservableObject {
             pubKey: identity.publicKeyBase64()
         )
         self.discovery = disc
-        Task {
-            await disc.setObserver { [weak self] peers in
-                Task { @MainActor in self?.peers = peers }
-            }
-            await disc.start()
+        // Discovery is a plain class now (blocking I/O on its own queue),
+        // so no actor await dance. The observer fires from the discovery
+        // io queue; marshal onto main for the @Published mutation.
+        disc.setObserver { [weak self] peers in
+            DispatchQueue.main.async { self?.peers = peers }
         }
+        disc.start()
     }
 
     func stop() {
-        if let d = discovery { Task { await d.stop() } }
+        discovery?.stop()
         transfer.stop()
     }
 

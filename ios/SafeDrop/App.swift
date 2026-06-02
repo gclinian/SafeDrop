@@ -84,6 +84,7 @@ struct HomeView: View {
             }
             .overlay { receivedClipboardBanner }
             .overlay { toolPromptOverlay }
+            .overlay { outboundPairOverlay }
         }
     }
 
@@ -193,6 +194,14 @@ struct HomeView: View {
         if let req = service.transfer.toolPrompts.first {
             ToolCallSheet(request: req)
                 .id(req.id)
+        }
+    }
+
+    @ViewBuilder
+    private var outboundPairOverlay: some View {
+        if let prompt = service.transfer.outboundPairPrompt {
+            OutboundPairSheet(prompt: prompt)
+                .id(prompt.id)
         }
     }
 
@@ -335,6 +344,42 @@ private struct ToolCallSheet: View {
             .padding(18)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
             .padding(20)
+        }
+    }
+}
+
+// MARK: - Outbound pair-code confirmation (sender side)
+
+private struct OutboundPairSheet: View {
+    let prompt: OutboundPairPrompt
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Sending to \(prompt.peerName)")
+                    .font(.headline)
+                Text(prompt.itemName)
+                    .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                Text("Confirm this pair code matches the one on")
+                    .font(.subheadline)
+                Text("\(prompt.peerName)'s screen, then they tap Accept:")
+                    .font(.subheadline)
+                Text(prompt.pairCode)
+                    .font(.system(size: 40, weight: .bold, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 6)
+                Divider()
+                HStack {
+                    ProgressView()
+                    Text("Waiting for them to accept…")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(18)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding(24)
         }
     }
 }

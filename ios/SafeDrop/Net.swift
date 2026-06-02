@@ -109,7 +109,17 @@ struct Peer: Equatable, Identifiable {
 
 // MARK: - Discovery (UDP broadcast)
 
-actor Discovery {
+/// UDP-broadcast peer discovery.
+///
+/// **Why this is a `final class` on a dedicated `DispatchQueue`, not an
+/// `actor`:** the listen loop calls a *blocking* `recvfrom` (1 s
+/// `SO_RCVTIMEO`). Running blocking POSIX syscalls on Swift's cooperative
+/// thread pool — which is what `actor` methods and `Task.detached` use —
+/// starves the pool and the loops stall on real hardware. This is the
+/// same lesson `TransferManager` already encodes (see CLAUDE.md). All
+/// blocking socket work happens on `ioQueue`; peer state is guarded by a
+/// plain lock.
+final class Discovery {
     let deviceId: String
     let deviceName: String
     let platformName: String
@@ -121,8 +131,15 @@ actor Discovery {
     private var sendFd: Int32 = -1
     private var recvFd: Int32 = -1
     private var stopRequested = false
-    private(set) var peers: [String: Peer] = [:]
-    var peersChanged: (([Peer]) -> Void)?
+
+    private let lock = NSLock()
+    private var peers: [String: Peer] = [:]
+    private var peersChanged: (([Peer]) -> Void)?
+
+    // Dedicated queue for blocking socket I/O — never the cooperative pool.
+    private let ioQueue = DispatchQueue(label: "safedrop.discovery",
+                                        qos: .utility,
+                                        attributes: .concurrent)
 
     init(deviceId: String, deviceName: String, platformName: String,
          tcpPort: UInt16, pubKey: String,
@@ -133,7 +150,9 @@ actor Discovery {
         self.pubKey = pubKey; self.capabilities = capabilities; self.version = version
     }
 
-    func setObserver(_ cb: @escaping ([Peer]) -> Void) { self.peersChanged = cb }
+    func setObserver(_ cb: @escaping ([Peer]) -> Void) {
+        lock.lock(); peersChanged = cb; lock.unlock()
+    }
 
     func start() {
         sendFd = socket(AF_INET, SOCK_DGRAM, 0)
@@ -147,7 +166,7 @@ actor Discovery {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = kSafeDropDiscoveryPort.bigEndian
-        addr.sin_addr.s_addr = INADDR_ANY.bigEndian
+        addr.sin_addr.s_addr = in_addr_t(0)   // INADDR_ANY
         let addrSize = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -157,17 +176,24 @@ actor Discovery {
         var tv = timeval(tv_sec: 1, tv_usec: 0)
         setsockopt(recvFd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
-        Task.detached { [weak self] in await self?.broadcastLoop() }
-        Task.detached { [weak self] in await self?.listenLoop() }
-        Task.detached { [weak self] in await self?.reaperLoop() }
+        ioQueue.async { [weak self] in self?.broadcastLoopSync() }
+        ioQueue.async { [weak self] in self?.listenLoopSync() }
+        ioQueue.async { [weak self] in self?.reaperLoopSync() }
     }
 
     func stop() {
         stopRequested = true
-        try? sendBye()
+        broadcast(byePayload())
         if sendFd >= 0 { close(sendFd); sendFd = -1 }
         if recvFd >= 0 { close(recvFd); recvFd = -1 }
     }
+
+    func snapshot() -> [Peer] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(peers.values)
+    }
+
+    // ---- payloads ----
 
     private func helloPayload() -> Data {
         let dict: [String: Any] = [
@@ -188,33 +214,71 @@ actor Discovery {
         return (try? JSONSerialization.data(withJSONObject: dict)) ?? Data()
     }
 
+    /// IPv4 destinations to fan each HELLO out to. Mirrors the Python
+    /// fix: loopback (same-machine / simulator), every active interface's
+    /// subnet-directed broadcast (what actually traverses real Wi-Fi),
+    /// and the global broadcast as a fallback. Sending to `255.255.255.255`
+    /// alone does NOT reach peers on most real networks.
+    private func broadcastTargets() -> [in_addr_t] {
+        var targets: [in_addr_t] = [inet_addr("127.0.0.1")]
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifaddr) == 0, let first = ifaddr {
+            var cur: UnsafeMutablePointer<ifaddrs>? = first
+            while let ptr = cur {
+                defer { cur = ptr.pointee.ifa_next }
+                let flags = Int32(ptr.pointee.ifa_flags)
+                guard (flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING),
+                      (flags & IFF_LOOPBACK) == 0,
+                      (flags & IFF_BROADCAST) != 0,
+                      let sa = ptr.pointee.ifa_addr,
+                      sa.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+                let name = String(cString: ptr.pointee.ifa_name)
+                guard name.hasPrefix("en") || name.hasPrefix("br") else { continue }
+                // For IFF_BROADCAST links, ifa_dstaddr holds the broadcast
+                // address (computed by the OS from addr + netmask).
+                if let bcastSa = ptr.pointee.ifa_dstaddr {
+                    let b = bcastSa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                        $0.pointee.sin_addr.s_addr
+                    }
+                    if b != 0 { targets.append(b) }
+                }
+            }
+            freeifaddrs(ifaddr)
+        }
+        targets.append(inet_addr("255.255.255.255"))
+        var seen = Set<in_addr_t>()
+        return targets.filter { seen.insert($0).inserted }
+    }
+
     private func broadcast(_ payload: Data) {
         guard sendFd >= 0 else { return }
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = kSafeDropDiscoveryPort.bigEndian
-        addr.sin_addr.s_addr = inet_addr("255.255.255.255")
         let addrSize = socklen_t(MemoryLayout<sockaddr_in>.size)
-        _ = payload.withUnsafeBytes { buf in
-            withUnsafePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.sendto(sendFd, buf.baseAddress, payload.count, 0, $0, addrSize)
+        for target in broadcastTargets() {
+            var addr = sockaddr_in()
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = kSafeDropDiscoveryPort.bigEndian
+            addr.sin_addr.s_addr = target
+            _ = payload.withUnsafeBytes { buf in
+                withUnsafePointer(to: &addr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        Darwin.sendto(sendFd, buf.baseAddress, payload.count, 0, $0, addrSize)
+                    }
                 }
             }
         }
     }
 
-    private func sendBye() throws { broadcast(byePayload()) }
+    // ---- loops (run on ioQueue, blocking) ----
 
-    private func broadcastLoop() async {
+    private func broadcastLoopSync() {
         let payload = helloPayload()
         while !stopRequested {
             broadcast(payload)
-            try? await Task.sleep(nanoseconds: UInt64(kSafeDropBroadcastIntervalSec * 1_000_000_000))
+            Thread.sleep(forTimeInterval: kSafeDropBroadcastIntervalSec)
         }
     }
 
-    private func listenLoop() async {
+    private func listenLoopSync() {
         var buf = [UInt8](repeating: 0, count: 8192)
         var addr = sockaddr_in()
         var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -226,21 +290,25 @@ actor Discovery {
                     }
                 }
             }
-            if received <= 0 {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                continue
-            }
+            // recvfrom returns <= 0 on the 1 s timeout (EAGAIN) — just loop
+            // and re-check stopRequested. No Task.sleep (we're not on the
+            // cooperative pool here).
+            if received <= 0 { continue }
             let data = Data(buf.prefix(received))
             let ipStr = String(cString: inet_ntoa(addr.sin_addr))
-            await handleDatagram(data, sender: ipStr)
+            handleDatagram(data, sender: ipStr)
         }
     }
 
-    private func handleDatagram(_ data: Data, sender: String) async {
+    private func handleDatagram(_ data: Data, sender: String) {
         guard let msg = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let kind = msg["type"] as? String,
               let id = msg["device_id"] as? String,
               id != deviceId else { return }
+
+        var snapshot: [Peer]? = nil
+        var observer: (([Peer]) -> Void)? = nil
+
         if kind == "HELLO" {
             guard let port = msg["tcp_port"] as? Int,
                   let pub = msg["pubkey"] as? String,
@@ -256,28 +324,40 @@ actor Discovery {
                 capabilities: caps,
                 lastSeen: Date()
             )
+            lock.lock()
             peers[id] = peer
-            peersChanged?(Array(peers.values))
+            snapshot = Array(peers.values)
+            observer = peersChanged
+            lock.unlock()
         } else if kind == "BYE" {
+            lock.lock()
             if peers.removeValue(forKey: id) != nil {
-                peersChanged?(Array(peers.values))
+                snapshot = Array(peers.values)
+                observer = peersChanged
             }
+            lock.unlock()
         }
+
+        if let snap = snapshot { observer?(snap) }
     }
 
-    private func reaperLoop() async {
+    private func reaperLoopSync() {
         while !stopRequested {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            Thread.sleep(forTimeInterval: 1.0)
             let cutoff = Date().addingTimeInterval(-kSafeDropPeerTTLSec)
+            var snapshot: [Peer]? = nil
+            var observer: (([Peer]) -> Void)? = nil
+            lock.lock()
             let before = peers.count
             peers = peers.filter { $0.value.lastSeen >= cutoff }
             if peers.count != before {
-                peersChanged?(Array(peers.values))
+                snapshot = Array(peers.values)
+                observer = peersChanged
             }
+            lock.unlock()
+            if let snap = snapshot { observer?(snap) }
         }
     }
-
-    func snapshot() -> [Peer] { Array(peers.values) }
 }
 
 // MARK: - Local IP detection

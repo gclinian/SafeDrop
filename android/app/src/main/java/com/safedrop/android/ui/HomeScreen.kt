@@ -68,6 +68,7 @@ import com.safedrop.android.net.Peer
 import com.safedrop.android.net.TCP_PORT
 import com.safedrop.android.net.ToolCallAuditEntry
 import com.safedrop.android.net.ToolCallRequest
+import com.safedrop.android.net.TransferDirection
 import com.safedrop.android.net.TransferKind
 import com.safedrop.android.net.TransferState
 import com.safedrop.android.net.TransferStatus
@@ -217,6 +218,20 @@ fun HomeScreen(service: SafeDropService) {
                 pendingToolCall = null
             },
         )
+    }
+
+    // Sender-side pair-code verification (mirror of desktop v1.6.2): while
+    // an outbound transfer waits for the receiver to Accept, show the code
+    // so the two users can confirm it matches before accepting.
+    var hiddenPairTransferId by remember { mutableStateOf<String?>(null) }
+    val outboundPending = transfers.values.firstOrNull {
+        it.direction == TransferDirection.Send &&
+            it.status == TransferStatus.Pending &&
+            it.pairCode.isNotEmpty() &&
+            it.transferId != hiddenPairTransferId
+    }
+    outboundPending?.let { t ->
+        OutboundPairDialog(state = t, onHide = { hiddenPairTransferId = t.transferId })
     }
 }
 
@@ -488,6 +503,43 @@ private fun IncomingRequestDialog(
         },
         confirmButton = { Button(onClick = onAccept) { Text("Accept") } },
         dismissButton = { OutlinedButton(onClick = onReject) { Text("Reject") } },
+    )
+}
+
+@Composable
+private fun OutboundPairDialog(
+    state: TransferState,
+    onHide: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onHide,
+        title = { Text("Sending to ${state.peerName}") },
+        text = {
+            Column {
+                Text(
+                    state.name,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("Confirm this code matches the one on " +
+                    "${state.peerName}'s screen, then they tap Accept:")
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    state.pairCode,
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Waiting for them to accept…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onHide) { Text("Hide") } },
     )
 }
 

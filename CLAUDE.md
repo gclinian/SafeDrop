@@ -123,7 +123,12 @@ or `Trust.swift` (per-platform trust persistence), `ui/` (Compose or
 SwiftUI). The iOS code has one platform quirk worth knowing: blocking
 POSIX socket syscalls run on a dedicated `DispatchQueue` (`ioQueue`),
 not Swift's cooperative thread pool, because the cooperative pool
-deadlocks under blocking I/O.
+deadlocks under blocking I/O. This applies to **both** `TransferManager`
+(TCP) **and** `Discovery` (UDP) — `Discovery` is a `final class` on its
+own queue, not an `actor`, for exactly this reason (an `actor` running a
+blocking `recvfrom` stalls its executor). Discovery also broadcasts to
+loopback + per-interface subnet broadcast + `255.255.255.255`, never
+just the global broadcast (which doesn't traverse most real Wi-Fi).
 
 ## Development commands
 

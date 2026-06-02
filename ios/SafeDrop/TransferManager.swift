@@ -44,6 +44,19 @@ final class ToolCallRequest: ObservableObject, Identifiable {
     }
 }
 
+// MARK: - Outbound pair-code prompt
+
+/// Surfaced on the SENDER while an outbound transfer waits for the
+/// receiver to Accept. The UI shows `pairCode` big so the two users can
+/// confirm the codes match before accepting.
+struct OutboundPairPrompt: Identifiable, Equatable {
+    var id: String { transferId }
+    let transferId: String
+    let peerName: String
+    let pairCode: String
+    let itemName: String
+}
+
 // MARK: - Audit entries
 
 struct ToolCallAuditEntry: Identifiable {
@@ -77,6 +90,9 @@ final class TransferManager: ObservableObject {
     @Published var audit: [ToolCallAuditEntry] = []
     @Published var toolPrompts: [ToolCallRequest] = []
     @Published var lastReceivedClipboard: (peerName: String, contentType: String, content: String)? = nil
+    // Shown on the SENDER while we wait for the receiver to Accept, so the
+    // two users can confirm the pair code matches (mirrors desktop v1.6.2).
+    @Published var outboundPairPrompt: OutboundPairPrompt? = nil
 
     private var serverFd: Int32 = -1
     private var stopRequested = false
@@ -340,6 +356,11 @@ final class TransferManager: ObservableObject {
                     let (fd, session) = try self.openSession(peer: peer)
                     defer { close(fd) }
                     let transferId = UUID().uuidString
+                    // Surface the pair code NOW (before we block on ACCEPT)
+                    // so the sender UI can show it for visual verification.
+                    self.publishOutboundPair(transferId: transferId, peerName: peer.name,
+                                             pairCode: session.pairCode,
+                                             item: "Clipboard (\(contentType))")
                     let preview = String(content.prefix(200))
                     try FrameProtocol.sendJSON(fd, [
                         "type": "REQUEST", "transfer_id": transferId,
@@ -347,6 +368,7 @@ final class TransferManager: ObservableObject {
                         "preview": preview, "length": content.utf8.count,
                     ], encrypt: { try session.encrypt($0) })
                     let decision = try FrameProtocol.recvJSON(fd, decrypt: { try session.decrypt($0) })
+                    self.clearOutboundPair(transferId)
                     guard (decision["type"] as? String) == "ACCEPT" else {
                         cont.resume(returning: ["status": "rejected", "pair_code": session.pairCode]); return
                     }
@@ -355,7 +377,10 @@ final class TransferManager: ObservableObject {
                         "content_type": contentType, "content": content,
                     ], encrypt: { try session.encrypt($0) })
                     cont.resume(returning: ["status": "done", "pair_code": session.pairCode])
-                } catch { cont.resume(throwing: error) }
+                } catch {
+                    self.clearOutboundPair(nil)
+                    cont.resume(throwing: error)
+                }
             }
         }
     }
@@ -383,6 +408,8 @@ final class TransferManager: ObservableObject {
                     let (fd, session) = try self.openSession(peer: peer)
                     defer { close(fd) }
                     let transferId = UUID().uuidString
+                    self.publishOutboundPair(transferId: transferId, peerName: peer.name,
+                                             pairCode: session.pairCode, item: fileName)
                     try FrameProtocol.sendJSON(fd, [
                         "type": "REQUEST", "transfer_id": transferId,
                         "kind": "file",
@@ -391,6 +418,7 @@ final class TransferManager: ObservableObject {
                     ], encrypt: { try session.encrypt($0) })
 
                     let decision = try FrameProtocol.recvJSON(fd, decrypt: { try session.decrypt($0) })
+                    self.clearOutboundPair(transferId)
                     guard (decision["type"] as? String) == "ACCEPT" else {
                         cont.resume(returning: [
                             "status": "rejected", "pair_code": session.pairCode,
@@ -425,7 +453,36 @@ final class TransferManager: ObservableObject {
                         "pair_code": session.pairCode,
                         "bytes": bytesSent,
                     ])
-                } catch { cont.resume(throwing: error) }
+                } catch {
+                    self.clearOutboundPair(nil)
+                    cont.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    // ---- sender-side pair-code prompt (v1.7) ----
+
+    private func publishOutboundPair(transferId: String, peerName: String,
+                                     pairCode: String, item: String) {
+        DispatchQueue.main.async {
+            self.outboundPairPrompt = OutboundPairPrompt(
+                transferId: transferId, peerName: peerName,
+                pairCode: pairCode, itemName: item)
+        }
+    }
+
+    /// Clear the prompt. Pass a transferId to only clear if it still matches
+    /// (avoids a late clear wiping a newer transfer's prompt); pass nil to
+    /// force-clear on error paths.
+    private func clearOutboundPair(_ transferId: String?) {
+        DispatchQueue.main.async {
+            if let tid = transferId {
+                if self.outboundPairPrompt?.transferId == tid {
+                    self.outboundPairPrompt = nil
+                }
+            } else {
+                self.outboundPairPrompt = nil
             }
         }
     }

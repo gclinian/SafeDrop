@@ -5,6 +5,57 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-05-26
+
+The "iOS actually works on real hardware" release. Fixes the iOS
+discovery interop bug (iOS couldn't see or be seen by other devices)
+and completes sender-side pair-code display on iOS + Android.
+
+### Fixed — iOS discovery interop (the big one)
+- **iOS now broadcasts to the subnet-directed address + loopback**, not
+  just `255.255.255.255`. The global broadcast is routinely dropped on
+  real Wi-Fi (VPN default routes, AP client isolation, iOS's network
+  stack) — the subnet broadcast (e.g. `192.168.1.255`, computed per
+  interface from its netmask via `getifaddrs`) is what actually reaches
+  peers. This is why **other devices couldn't see iOS**. (Same root
+  cause + fix as the Python discovery fix in 1.6.x.)
+- **iOS `Discovery` rewritten from an `actor` to a `final class` on a
+  dedicated `DispatchQueue`.** The listen loop's blocking `recvfrom`
+  (1 s timeout) was running on Swift's cooperative thread pool (via
+  `actor` + `Task.detached`), which starves the pool and stalls the
+  loops on real devices — the exact anti-pattern `TransferManager`
+  already fixed. This is why **iOS couldn't see others**. Now all
+  blocking socket I/O runs on `ioQueue`; peer state is lock-guarded.
+- **Verified on the iOS Simulator**: a Python peer discovers the iOS
+  device (via subnet broadcast `192.168.0.100`), and the iOS app's
+  *Nearby devices* list shows the Python peer — both directions.
+
+  > On a **real device**, iOS will show the Local Network permission
+  > prompt on first launch (driven by `NSLocalNetworkUsageDescription`
+  > + `NSBonjourServices`, already in Info.plist). The user must tap
+  > **Allow** or discovery stays dark — this is an OS requirement, not
+  > a SafeDrop setting.
+
+### Fixed — sender-side pair-code display (completes 1.6.2)
+- **iOS**: a confirmation sheet now appears on the sender showing the
+  4-digit pair code while waiting for the receiver to Accept
+  (`OutboundPairPrompt` published from `TransferManager.sendText` /
+  `sendFile`, rendered as `OutboundPairSheet`). Auto-dismisses when the
+  transfer proceeds, completes, is rejected, or fails.
+- **Android**: same — `OutboundPairDialog` derived from the outbound
+  transfer's `pending` state + non-empty `pairCode`, with a Hide
+  button. Both now honor SPEC §5.1 (both sides display the same code).
+
+### Changed
+- `SPEC.md` §5.1 documents the multi-target broadcast (loopback +
+  subnet + global) and the "blocking I/O off the cooperative pool"
+  rule for all platforms.
+- `pyproject.toml` → `1.7.0`.
+
+### Tests
+- Python suite unchanged at 103/103 (this release is iOS/Android +
+  SPEC; no Python code touched). iOS + Android both build clean.
+
 ## [1.6.2] — 2026-05-26
 
 Bugfix — the desktop GUI **sender never displayed the pair code**,
