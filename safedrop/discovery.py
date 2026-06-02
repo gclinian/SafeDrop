@@ -11,12 +11,15 @@ Each running SafeDrop instance:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import socket
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
+
+import psutil
 
 from .config import (
     BROADCAST_INTERVAL,
@@ -44,57 +47,131 @@ class Peer:
 PeerCallback = Callable[[dict[str, Peer]], None]
 
 
-def _get_outbound_ip() -> str:
-    """Best-effort local LAN IP detection.
+@dataclass(frozen=True)
+class BroadcastInterface:
+    name: str
+    ip: str
+    broadcast: str
 
-    Opens a UDP socket "towards" a public address — the OS picks the
-    routing-correct local interface but no packets are actually sent.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+def _is_usable_ipv4(value: str | None) -> bool:
+    if not value:
+        return False
     try:
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-    except OSError:
-        ip = "127.0.0.1"
-    finally:
-        sock.close()
-    return ip
+        addr = ipaddress.IPv4Address(value)
+    except ValueError:
+        return False
+    return not (
+        addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
 
 
-def _broadcast_targets(local_ip: str) -> tuple[str, ...]:
-    """Best-effort list of IPv4 destinations to send each HELLO datagram to.
+def _broadcast_for(ip: str, netmask: str | None) -> str | None:
+    if not netmask:
+        return None
+    try:
+        return str(ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False).broadcast_address)
+    except ValueError:
+        return None
 
-    Strategy (each target is tried; failures are silently swallowed by
-    :meth:`DiscoveryService._broadcast`):
 
-    1. ``127.0.0.1`` — loopback. Catches two SafeDrop instances on the
-       same machine (common during development and in the test suite).
-    2. **Subnet broadcast**, computed by assuming /24 on the outbound
-       interface (e.g. ``192.168.0.255`` for ``192.168.0.101``). This is
-       what the OS computes natively when SO_BROADCAST is set; we
-       compute it explicitly so it still works when ``255.255.255.255``
-       is unreachable — typical on machines running a VPN whose default
-       route swallows global broadcasts.
-    3. ``255.255.255.255`` — global broadcast. Works on flat LANs with
-       no VPN; harmless when it doesn't.
-    """
+def _broadcast_interfaces() -> tuple[BroadcastInterface, ...]:
+    """Return active IPv4 interfaces with their directed-broadcast address."""
+    stats = psutil.net_if_stats()
+    interfaces: list[BroadcastInterface] = []
+    seen: set[tuple[str, str]] = set()
+
+    for name, addrs in psutil.net_if_addrs().items():
+        stat = stats.get(name)
+        if stat is not None and not stat.isup:
+            continue
+        for addr in addrs:
+            if addr.family != socket.AF_INET or not _is_usable_ipv4(addr.address):
+                continue
+            broadcast = addr.broadcast or _broadcast_for(addr.address, addr.netmask)
+            if not broadcast:
+                continue
+            try:
+                ipaddress.IPv4Address(broadcast)
+            except ValueError:
+                continue
+            key = (addr.address, broadcast)
+            if key in seen:
+                continue
+            seen.add(key)
+            interfaces.append(BroadcastInterface(name=name, ip=addr.address, broadcast=broadcast))
+    return tuple(interfaces)
+
+
+def _local_ip_display() -> str:
+    ips: list[str] = []
+    seen: set[str] = set()
+    for iface in _broadcast_interfaces():
+        if iface.ip in seen:
+            continue
+        seen.add(iface.ip)
+        ips.append(iface.ip)
+    return ", ".join(ips) if ips else "127.0.0.1"
+
+
+def _broadcast_targets(local_ip: str | None = None) -> tuple[str, ...]:
+    """Return loopback, directed broadcasts, and global broadcast targets."""
     targets: list[str] = ["127.0.0.1"]
-    if local_ip and local_ip != "127.0.0.1":
-        parts = local_ip.split(".")
-        if len(parts) == 4 and all(p.isdigit() for p in parts):
-            # /24 assumption is the right call for the vast majority of
-            # home + office LANs. Networks that use /16 still typically
-            # have routers that accept the /24 broadcast.
-            targets.append(f"{parts[0]}.{parts[1]}.{parts[2]}.255")
+    for iface in _broadcast_interfaces():
+        if local_ip and iface.ip != local_ip:
+            continue
+        targets.append(iface.broadcast)
     targets.append("255.255.255.255")
-    # Preserve order, drop duplicates.
+
     seen: set[str] = set()
     out: list[str] = []
-    for t in targets:
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
+    for target in targets:
+        if target in seen:
+            continue
+        seen.add(target)
+        out.append(target)
     return tuple(out)
+
+
+def _broadcast_endpoints() -> tuple[tuple[str, str | None], ...]:
+    """Return ``(target, source_ip)`` endpoints for broadcast sends."""
+    endpoints: list[tuple[str, str | None]] = [("127.0.0.1", None)]
+    for iface in _broadcast_interfaces():
+        endpoints.append((iface.broadcast, iface.ip))
+        endpoints.append(("255.255.255.255", iface.ip))
+    if len(endpoints) == 1:
+        endpoints.append(("255.255.255.255", None))
+
+    seen: set[tuple[str, str | None]] = set()
+    out: list[tuple[str, str | None]] = []
+    for endpoint in endpoints:
+        if endpoint in seen:
+            continue
+        seen.add(endpoint)
+        out.append(endpoint)
+    return tuple(out)
+
+
+def _send_udp_broadcast(
+    target: str,
+    source_ip: str | None,
+    payload: bytes,
+    default_sock: socket.socket,
+) -> None:
+    if source_ip is None:
+        default_sock.sendto(payload, (target, DISCOVERY_PORT))
+        return
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind((source_ip, 0))
+        sock.sendto(payload, (target, DISCOVERY_PORT))
+    finally:
+        sock.close()
 
 
 class DiscoveryService:
@@ -118,7 +195,7 @@ class DiscoveryService:
         self.capabilities = tuple(capabilities)
         self.on_change = on_change
 
-        self.local_ip = _get_outbound_ip()
+        self.local_ip = _local_ip_display()
         self.peers: dict[str, Peer] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -184,11 +261,12 @@ class DiscoveryService:
     def _broadcast(self, payload: bytes) -> None:
         if self._send_sock is None:
             return
-        # Recompute targets each tick so we adapt to a network change
+        # Recompute endpoints each tick so we adapt to a network change
         # (e.g. plugging into a different LAN). The function is cheap.
-        for target in _broadcast_targets(self.local_ip):
+        self.local_ip = _local_ip_display()
+        for target, source_ip in _broadcast_endpoints():
             try:
-                self._send_sock.sendto(payload, (target, DISCOVERY_PORT))
+                _send_udp_broadcast(target, source_ip, payload, self._send_sock)
             except OSError:
                 # Any single target can fail on a particular network —
                 # the others still get a chance. (E.g. 255.255.255.255
