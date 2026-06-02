@@ -126,6 +126,42 @@ class SafeDropE2ETest(unittest.TestCase):
         self.assertEqual(received[0].content, text)
         self.assertEqual(received[0].content_type, "url")
 
+    def test_sender_surfaces_pair_code_before_transfer(self) -> None:
+        # Regression for the "sender never shows the pair code" bug.
+        # SPEC requires BOTH sides to display the same code so the two
+        # humans can verify visually. The wire + state layer must surface
+        # a non-empty 4-digit pair code on the *sender* while the transfer
+        # is still pending (i.e. before bytes flow), which is the window
+        # the desktop GUI now renders a confirmation dialog for.
+        snapshots: list[tuple[str, str]] = []  # (status, pair_code) at emit time
+
+        def capture(s: TransferState) -> None:
+            if s.direction == "send":
+                snapshots.append((s.status, s.pair_code))
+
+        self.alice.on_state = capture
+        try:
+            peer = self._peer_for_bob()
+            state = self.alice.send_clipboard(peer, "verify me", "text")
+            ok = _wait_for(lambda: state.status in ("done", "failed", "rejected"), timeout=10)
+            self.assertTrue(ok, f"transfer did not finish, status={state.status}")
+        finally:
+            self.alice.on_state = None
+
+        # A pending emit carrying a real pair code must have happened
+        # before any "transferring" emit.
+        pending_codes = [pc for (st, pc) in snapshots if st == "pending" and pc]
+        self.assertTrue(pending_codes,
+                        f"sender never surfaced a pair code while pending: {snapshots}")
+        code = pending_codes[0]
+        self.assertEqual(len(code), 4)
+        self.assertTrue(code.isdigit())
+
+        # And it must match what the receiver derives (the whole point).
+        from safedrop.crypto import derive_session
+        bob_session = derive_session(self.bob.identity, self.alice.identity.public_key_b64())
+        self.assertEqual(code, bob_session.pair_code)
+
     def test_reject_flow(self) -> None:
         # Configure Bob to reject everything.
         self.bob.on_request = lambda req: req.reject()

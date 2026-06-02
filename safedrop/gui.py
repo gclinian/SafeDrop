@@ -125,6 +125,9 @@ class SafeDropApp:
 
         self._peers: dict[str, Peer] = {}
         self._transfers: dict[str, TransferState] = {}
+        # Sender-side pair-code windows, keyed by transfer_id, shown while
+        # we wait for the receiver to Accept (see _apply_transfer_state).
+        self._pair_windows: dict[str, tk.Toplevel] = {}
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_status_bar()
@@ -389,6 +392,68 @@ class SafeDropApp:
             self.transfer_tree.item(state.transfer_id, values=values)
         else:
             self.transfer_tree.insert("", 0, iid=state.transfer_id, values=values)
+
+        # Sender-side pair-code verification (SPEC §"pair_code": both sides
+        # must display the same code). While we wait for the receiver to
+        # Accept, the sender's pair code is shown so the two humans can
+        # confirm the codes match. Dismiss once the transfer proceeds/ends.
+        if state.direction == "send":
+            if state.status == "pending" and state.pair_code:
+                self._show_sender_pair_code(state)
+            elif state.status in ("transferring", "done", "failed", "rejected"):
+                self._dismiss_sender_pair_code(state.transfer_id)
+
+    def _show_sender_pair_code(self, state: TransferState) -> None:
+        # One window per in-flight transfer; ignore repeat "pending" emits.
+        if state.transfer_id in self._pair_windows:
+            return
+        top = tk.Toplevel(self.root)
+        top.title("Verify pair code")
+        top.transient(self.root)
+        top.geometry("380x270")
+        top.resizable(False, False)
+        self._pair_windows[state.transfer_id] = top
+        top.protocol("WM_DELETE_WINDOW",
+                     lambda: self._dismiss_sender_pair_code(state.transfer_id))
+
+        wrap = ttk.Frame(top, padding=18)
+        wrap.pack(fill="both", expand=True)
+
+        ttk.Label(wrap, text=f"Sending to {state.peer_name}",
+                  font=("Helvetica", 12, "bold")).pack(anchor="w")
+        ttk.Label(wrap, text=state.name, foreground="#666").pack(anchor="w")
+
+        ttk.Separator(wrap).pack(fill="x", pady=10)
+
+        ttk.Label(wrap, text="Confirm this code matches the one shown on",
+                  foreground="#666").pack(anchor="w")
+        ttk.Label(wrap, text=f"{state.peer_name}, then they tap Accept:",
+                  foreground="#666").pack(anchor="w")
+        ttk.Label(wrap, text=state.pair_code,
+                  font=("Helvetica", 30, "bold")).pack(anchor="w", pady=(8, 0))
+
+        ttk.Separator(wrap).pack(fill="x", pady=10)
+        ttk.Label(wrap, text="Waiting for them to accept…",
+                  foreground="#888").pack(anchor="w")
+
+        btns = ttk.Frame(wrap)
+        btns.pack(fill="x", pady=(12, 0))
+        ttk.Button(btns, text="Hide",
+                   command=lambda: self._dismiss_sender_pair_code(state.transfer_id)
+                   ).pack(side="right")
+
+        top.lift()
+        top.attributes("-topmost", True)
+        top.after(200, lambda: top.attributes("-topmost", False))
+
+    def _dismiss_sender_pair_code(self, transfer_id: str) -> None:
+        win = self._pair_windows.pop(transfer_id, None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except tk.TclError:
+                pass
 
     def _status_text(self, state: TransferState) -> str:
         if state.status == "failed" and state.error:

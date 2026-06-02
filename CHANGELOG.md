@@ -5,6 +5,36 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-05-26
+
+Bugfix — the desktop GUI **sender never displayed the pair code**,
+breaking the visual man-in-the-middle check the protocol is designed
+around. `SPEC.md` requires both sides to show the same 4-digit code;
+the receiver's Accept dialog showed it, but the sender showed nothing,
+so the user had nothing to compare against.
+
+### Fixed
+- **Sender-side pair-code verification** (`safedrop/gui.py`). When you
+  start a transfer, a "Verify pair code" window now appears on the
+  sender showing the 4-digit code, and stays up while waiting for the
+  receiver to Accept — mirroring the receiver's dialog. It auto-
+  dismisses once the transfer proceeds (`transferring`), completes, is
+  rejected, or fails. The code is already carried on the wire and in
+  `TransferState.pair_code`; this is purely the missing display.
+
+### Tests
+- New `test_sender_surfaces_pair_code_before_transfer` in
+  `tests/test_e2e.py`: asserts the sender emits a non-empty 4-digit
+  pair code while the transfer is still `pending` (before bytes flow),
+  and that it matches the code the receiver independently derives.
+  103 tests green.
+
+### Known gaps (follow-ups, not in this release)
+- **iOS** surfaces the pair code only *after* the transfer finishes
+  (in a status line), not during the pre-Accept verification window.
+- **Android** sender does not show the pair code at verification time.
+  Both should mirror the desktop fix to fully honor SPEC §`pair_code`.
+
 ## [1.6.1] — 2026-05-26
 
 Patch — make the desktop install path **actually one line**. No
