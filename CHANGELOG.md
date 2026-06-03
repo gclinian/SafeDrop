@@ -5,6 +5,42 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-06-03
+
+Community contribution — interface-aware desktop discovery. Thanks to
+**@JianBin0218** (PR #1).
+
+### Fixed
+- **Desktop discovery now computes each interface's directed broadcast
+  from its real netmask** instead of assuming /24. The previous /24
+  guess produced the wrong broadcast on non-/24 LANs — most notably an
+  **iPhone Personal Hotspot** (`172.20.10.x` is a /28, broadcast
+  `172.20.10.15`), so phones on a hotspot never discovered the desktop.
+  Now uses `psutil` to enumerate active, up interfaces and derive the
+  broadcast per interface (`safedrop/discovery.py`).
+- **Multi-homed machines send each directed broadcast out the right
+  interface.** `_broadcast_endpoints()` pairs each broadcast target
+  with its source IP and binds the send socket to that source, so a
+  box with e.g. a Radmin/VPN adapter + Wi-Fi no longer leaks the
+  Wi-Fi broadcast onto the VPN interface (or vice-versa).
+- The status bar's local-IP display now lists every active interface
+  IP (`_local_ip_display()`).
+
+### Changed
+- New runtime dependency: `psutil>=5.9` (interface enumeration).
+- `pyproject.toml` → `1.7.1`.
+
+### Tests
+- `tests/test_discovery.py` rewritten around the new
+  `BroadcastInterface` model: netmask-derived broadcast (incl. the /28
+  hotspot case), down-adapter skipping, per-source-IP endpoint binding,
+  multi-interface IP display. 104 / 104 green.
+
+> Note: this release is desktop-Python only. The iOS native discovery
+> already computes per-interface broadcasts from netmask via
+> `getifaddrs` (shipped in 1.7.0), so it was already correct for the
+> hotspot case.
+
 ## [1.7.0] — 2026-05-26
 
 The "iOS actually works on real hardware" release. Fixes the iOS
